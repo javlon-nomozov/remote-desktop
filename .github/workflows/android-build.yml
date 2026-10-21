@@ -1,0 +1,47 @@
+name: Build Android APK
+
+# viewer-android debug APK'ni bulutda quradi va artifact sifatida yuklaydi.
+# Ishga tushadi: main/master'ga push qilinganda yoki qo'lda (workflow_dispatch).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "viewer-android/**"
+      - ".github/workflows/android-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: SDK paketlari
+        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Debug APK qurish
+        working-directory: viewer-android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: APK'ni yuklash (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: viewer-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

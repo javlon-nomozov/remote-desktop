@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.log
+
+# Builds / artifacts
+dist/
+build/
+*.apk
+*.aab
+
+# Android
+viewer-android/.gradle/
+viewer-android/local.properties
+viewer-android/**/build/
+*.keystore
+*.jks
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Secrets / local config
+*.secret
+secrets.json
+
+# Local databases
+*.db
+*.sqlite3

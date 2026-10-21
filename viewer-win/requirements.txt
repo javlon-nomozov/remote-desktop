@@ -1,0 +1,6 @@
+# Windows viewer bog'liqliklari (Faza 2 MVP).
+# Python 3.12/3.13 tavsiya etiladi.
+#   uv venv .venv --python 3.12 ;  uv pip install -r requirements.txt
+
+pillow>=10.3
+websockets>=13.0

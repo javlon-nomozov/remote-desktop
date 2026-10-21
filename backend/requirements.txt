@@ -1,0 +1,11 @@
+# Backend + bot bog'liqliklari
+aiogram>=3.13,<4
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlmodel>=0.0.22
+sqladmin>=0.19
+greenlet>=3.0            # SQLAlchemy async (SQLAdmin talab qiladi)
+pydantic-settings>=2.4
+httpx>=0.27
+itsdangerous>=2.2          # starlette SessionMiddleware uchun
+psycopg2-binary>=2.9       # Postgres (Railway)
