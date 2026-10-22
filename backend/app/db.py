@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlmodel import Session, SQLModel
 
 from .config import settings
@@ -31,8 +31,26 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
+    _migrate_bigint()
     with Session(engine) as s:
         models.AppSettings.get_or_create(s)
+
+
+def _migrate_bigint() -> None:
+    """Telegram ID ustunlarini INTEGER -> BIGINT (Postgres). create_all mavjud ustunni o'zgartirmaydi;
+    yangi akkauntlar ID'si 2^31 dan katta bo'lgani uchun ular ro'yxatdan o'ta olmas edi. Takroriy
+    ishga tushirish xavfsiz (faqat INTEGER bo'lsa o'zgartiradi). SQLite'da INTEGER allaqachon 64-bit."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        for table, column in (("users", "telegram_id"), ("payments", "admin_id")):
+            kind = conn.execute(
+                text("SELECT data_type FROM information_schema.columns "
+                     "WHERE table_name = :t AND column_name = :c"),
+                {"t": table, "c": column},
+            ).scalar()
+            if kind == "integer":
+                conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT"))
 
 
 @contextmanager

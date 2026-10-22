@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from pydantic import NaiveDatetime
+from sqlalchemy import BigInteger
 from sqlmodel import Field, Session, SQLModel, select
 
 # --- Status konstantalari (SQLite-friendly, str) ---
@@ -57,7 +58,8 @@ class User(SQLModel, table=True):
     __tablename__ = "users"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    telegram_id: int = Field(index=True, unique=True)
+    # BIGINT: yangi Telegram akkauntlari ID'si 2^31 dan katta (oddiy INTEGER'ga sig'maydi)
+    telegram_id: int = Field(sa_type=BigInteger, index=True, unique=True)
     username: Optional[str] = Field(default=None)
     full_name: str = Field(default="")
     phone: Optional[str] = Field(default=None)
@@ -136,7 +138,7 @@ class Payment(SQLModel, table=True):
     status: str = Field(default=PAY_PENDING, index=True)
     receipt_file_id: str = Field(default="")  # Telegram file_id
     receipt_kind: str = Field(default="photo")  # "photo" | "document"
-    admin_id: Optional[int] = Field(default=None)  # qaror qabul qilgan admin telegram id
+    admin_id: Optional[int] = Field(default=None, sa_type=BigInteger)  # qaror qabul qilgan admin telegram id
     note: str = Field(default="")             # rad etish sababi va h.k.
     created_at: NaiveDatetime = Field(default_factory=_now)
     decided_at: Optional[NaiveDatetime] = Field(default=None)
