@@ -8,6 +8,17 @@ from __future__ import annotations
 from . import keyboard, mouse, winapi
 from .touch import Contact, TouchInjector
 
+# Ko'p barmoqli gestura -> Windows tugma kombinatsiyasi.
+# (Android tomoni 3/4-barmoq swipe'ni aniqlab, shu nomlarni yuboradi.)
+GESTURES: dict[str, list[str]] = {
+    "taskview": ["MetaLeft", "Tab"],                       # Win+Tab (Task View)
+    "showdesktop": ["MetaLeft", "KeyD"],                   # Win+D
+    "switch_next": ["AltLeft", "Tab"],                     # Alt+Tab (keyingi oyna)
+    "switch_prev": ["AltLeft", "ShiftLeft", "Tab"],        # Alt+Shift+Tab (oldingi oyna)
+    "desktop_next": ["ControlLeft", "MetaLeft", "ArrowRight"],  # keyingi virtual ish stoli
+    "desktop_prev": ["ControlLeft", "MetaLeft", "ArrowLeft"],   # oldingi virtual ish stoli
+}
+
 
 class InputController:
     def __init__(self) -> None:
@@ -39,6 +50,8 @@ class InputController:
             self._on_key(msg)
         elif t == "text":
             keyboard.type_text(str(msg.get("value", "")))
+        elif t == "gesture":
+            self._on_gesture(msg)
 
     # --- touch ----------------------------------------------------------
     def _on_touch(self, msg: dict) -> None:
@@ -76,6 +89,12 @@ class InputController:
     # --- keyboard -------------------------------------------------------
     def _on_key(self, msg: dict) -> None:
         keyboard.key(str(msg.get("code", "")), bool(msg.get("down", False)))
+
+    # --- gestura (ko'p barmoq) ------------------------------------------
+    def _on_gesture(self, msg: dict) -> None:
+        combo = GESTURES.get(str(msg.get("name", "")))
+        if combo:
+            keyboard.chord(combo)
 
     # --- tozalash -------------------------------------------------------
     def reset(self) -> None:

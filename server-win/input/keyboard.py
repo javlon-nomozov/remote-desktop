@@ -84,6 +84,17 @@ def _unicode_input(ch: str, up: bool) -> w.INPUT:
     return w.INPUT(type=w.INPUT_KEYBOARD, u=w._INPUTunion(ki=ki))
 
 
+def chord(codes: list[str]) -> None:
+    """Tugma kombinatsiyasi: barchasini ketma-ket bosib, teskari tartibda qo'yib yuboradi.
+    Masalan ["AltLeft", "Tab"] -> Alt+Tab (oyna almashtirish)."""
+    pressed: list[str] = []
+    for c in codes:
+        if key(c, True):
+            pressed.append(c)
+    for c in reversed(pressed):
+        key(c, False)
+
+
 def type_text(text: str) -> None:
     """Unicode matn kiritish (klaviatura tilidan mustaqil)."""
     seq: list[w.INPUT] = []

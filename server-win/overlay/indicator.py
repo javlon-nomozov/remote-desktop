@@ -19,6 +19,7 @@ from __future__ import annotations
 import ctypes
 import threading
 import tkinter as tk
+from ctypes import wintypes
 
 _CHROMA = "#0b0c0e"  # fon uchun chroma-key (ekranda uchramaydigan rang)
 
@@ -31,19 +32,33 @@ WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TOPMOST = 0x00000008
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
+_LONG_PTR = ctypes.c_ssize_t
+_GA_ROOT = 2
+
+# MUHIM: imzolarni aniq belgilaymiz. Aks holda 64-bit'da ctypes HWND/style'ni c_int'ga
+# qisqartiradi va uslub NOTO'G'RI oynaga qo'llanadi — click-through shu sabab ishlamagan edi.
+try:
+    _get_wl = _user32.GetWindowLongPtrW
+    _set_wl = _user32.SetWindowLongPtrW
+except AttributeError:  # 32-bit Python
+    _get_wl = _user32.GetWindowLongW
+    _set_wl = _user32.SetWindowLongW
+_get_wl.restype = _LONG_PTR
+_get_wl.argtypes = [wintypes.HWND, ctypes.c_int]
+_set_wl.restype = _LONG_PTR
+_set_wl.argtypes = [wintypes.HWND, ctypes.c_int, _LONG_PTR]
+_user32.GetAncestor.restype = wintypes.HWND
+_user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 
 
 def _make_click_through(hwnd: int) -> None:
-    """Oynaga click-through uslublarini qo'shish."""
-    try:
-        get_ = _user32.GetWindowLongPtrW
-        set_ = _user32.SetWindowLongPtrW
-    except AttributeError:  # 32-bit Python
-        get_ = _user32.GetWindowLongW
-        set_ = _user32.SetWindowLongW
-    style = get_(hwnd, GWL_EXSTYLE)
-    style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
-    set_(hwnd, GWL_EXSTYLE, style)
+    """Oynani va uning top-level ajdodini click-through qiladi: sichqoncha/touch hodisasi
+    to'g'ridan-to'g'ri tagidagi oynaga o'tadi (indikator hech narsa bosmaydi)."""
+    top = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd
+    bits = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+    for h in {hwnd, top}:
+        cur = _get_wl(h, GWL_EXSTYLE)
+        _set_wl(h, GWL_EXSTYLE, cur | bits)
 
 
 class Indicator:
@@ -109,7 +124,7 @@ class Indicator:
         root.attributes("-alpha", 1.0)
         cv = tk.Canvas(root, width=size, height=size, bg=_CHROMA, highlightthickness=0)
         cv.pack()
-        self._dot = cv.create_oval(pad, pad, pad + s, pad + s, fill="#ff3b30", outline="")
+        self._dot = cv.create_oval(pad, pad, pad + s, pad + s, fill="#22c55e", outline="")
         self._cv = cv
         self._animate_dot()
 

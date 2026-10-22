@@ -52,7 +52,16 @@ Server bularni **haqiqiy touch kontakt** sifatida injekt qiladi → OS gesturani
 ```
 `buttons` — bitmask: 1=left, 2=right, 4=middle.
 
-### 2.3 Keyboard
+### 2.3 Gesture (ko'p barmoqli — viewer aniqlaydi)
+3/4 barmoqli swipe'ni viewer (Android) aniqlaydi va semantik buyruq yuboradi; server uni
+Windows tugma kombinatsiyasiga map qiladi (touchscreen OS-gesturasiga tayanmaydi).
+```jsonc
+{ "t": "gesture", "name": "switch_next" }
+```
+Nomlar: `taskview`, `showdesktop`, `switch_next`, `switch_prev`, `desktop_next`, `desktop_prev`.
+Odatiy map (4-barmoq L/R = oyna almashtirish): [`input/controller.py` → `GESTURES`].
+
+### 2.4 Keyboard
 ```jsonc
 { "t": "key", "code": "KeyA", "down": true, "mods": ["ctrl","shift"] }
 { "t": "text", "value": "salom" }   // IME/unicode kiritish
