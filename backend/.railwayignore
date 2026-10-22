@@ -1,0 +1,8 @@
+.venv/
+.venv-build/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+.railway/

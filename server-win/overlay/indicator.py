@@ -17,7 +17,7 @@ import threading
 import tkinter as tk
 from ctypes import wintypes
 
-_CHROMA = "#0b0c0e"  # fon uchun chroma-key (ekranda uchramaydigan rang)
+_CHROMA = "#ff00ff"  # fon uchun chroma-key (magenta — ishonchli colorkey)
 
 # Win32 — click-through
 GWL_EXSTYLE = -20
@@ -127,6 +127,12 @@ class Indicator:
         win.update_idletasks()
         try:
             _make_click_through(win.winfo_id())
+        except Exception:
+            pass
+        # MUHIM: SetWindowLong (yuqorida) tkinter colorkey'ini reset qiladi — qayta qo'llaymiz,
+        # aks holda fon shaffof bo'lmay, qora/magenta to'rtburchak ko'rinadi.
+        try:
+            win.attributes("-transparentcolor", _CHROMA)
         except Exception:
             pass
 
