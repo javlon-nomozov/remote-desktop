@@ -12,6 +12,8 @@ dist/
 build/
 *.apk
 *.aab
+*.spec
+.venv-build/
 
 # Android
 viewer-android/.gradle/
