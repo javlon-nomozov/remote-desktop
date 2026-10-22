@@ -9,6 +9,8 @@ Railway'da:
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import secrets
 
 import httpx
@@ -27,8 +29,16 @@ _basic = HTTPBasic()
 
 
 @app.on_event("startup")
-def _startup() -> None:
+async def _startup() -> None:
     init_db()
+    # Botni shu jarayonда ishga tushiramiz (Railway'да bitta xizmat kifoya).
+    if settings.run_bot and settings.bot_token:
+        from .bot.handlers import build_router
+        from .bot.loader import bot, dp
+
+        dp.include_router(build_router())
+        asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+        logging.getLogger("uvicorn").info("Bot polling started in web process")
 
 
 # SQLAdmin panel + relay (unique-kod ulanish)

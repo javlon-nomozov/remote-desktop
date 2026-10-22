@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Relay: viewer ulanishida faol obunani majburiy qilish (True bo'lsa token kerak)
     relay_require_subscription: bool = False
 
+    # Web xizmat ichida botni ham ishga tushirish (Railway'da bitta xizmat uchun qulay)
+    run_bot: bool = True
+
     model_config = SettingsConfigDict(
         env_file=str(ROOT / ".env"),
         env_file_encoding="utf-8",
