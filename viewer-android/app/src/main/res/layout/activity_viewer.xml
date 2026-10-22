@@ -48,24 +48,18 @@
     </LinearLayout>
 
     <!-- Kompyuter tugmalari (⌨ bosilganda ko'rinadi): Esc, Tab, Ctrl, Alt, Shift, Win, strelkalar,
-         F1-F12... Tugmalar ViewerActivity'da yaratiladi. Tepada — ekran klaviaturasi uni yopmaydi. -->
-    <HorizontalScrollView
+         F1-F12... Hammasi ekranga sig'adigan qatorlarda (ViewerActivity'da joylanadi). Tepada —
+         ekran klaviaturasi uni yopmaydi. -->
+    <LinearLayout
         android:id="@+id/keysBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:layout_marginTop="60dp"
         android:background="#88000000"
-        android:scrollbars="none"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:id="@+id/keysRow"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="4dp" />
-    </HorizontalScrollView>
+        android:orientation="vertical"
+        android:padding="2dp"
+        android:visibility="gone" />
 
     <!-- Touchpad tugmalari (faqat touchpad rejimida ko'rinadi): Chap · GYRO · O'ng -->
     <LinearLayout
@@ -109,5 +103,6 @@
         android:layout_height="1dp"
         android:alpha="0"
         android:inputType="textNoSuggestions"
+        android:imeOptions="flagNoExtractUi|flagNoFullscreen"
         android:importantForAutofill="no" />
 </FrameLayout>

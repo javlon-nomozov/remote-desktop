@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.hardware.Sensor
@@ -22,6 +23,7 @@ import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
@@ -44,7 +46,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     private lateinit var client: StreamClient
     private lateinit var hiddenInput: EditText
     private lateinit var touchpadBar: LinearLayout
-    private lateinit var keysBar: View
+    private lateinit var keysBar: LinearLayout
 
     // Kompyuter tugmalari: yoniq (yopishqoq) modifikatorlar, code -> tugma.
     // Keyingi oddiy tugma/harfdan keyin avtomatik qo'yib yuboriladi (Ctrl+C, Win+R, Alt+F4...).
@@ -223,31 +225,64 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     }
 
     // --- Kompyuter tugmalari paneli -----------------------------------
+    // Tugma guruhlari: [Esc..Del], [strelkalar, Home..PgDn], [F1-F12]. Qatorlarga layoutPcKeys() joylaydi.
+    private val keyGroups = ArrayList<List<MaterialButton>>()
+
     private fun setupPcKeys() {
-        val row = findViewById<LinearLayout>(R.id.keysRow)
-        fun add(label: String, onClick: (MaterialButton) -> Unit) {
+        fun key(label: String, onClick: (MaterialButton) -> Unit): MaterialButton {
             val b = MaterialButton(this)
             b.text = label
             b.isAllCaps = false
+            b.letterSpacing = 0f
+            b.maxLines = 1
             b.minWidth = 0
             b.minimumWidth = 0
             b.minHeight = 0
             b.minimumHeight = 0
             b.insetTop = 0
             b.insetBottom = 0
-            b.setPadding(dp(12), 0, dp(12), 0)
-            b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            b.cornerRadius = dp(6)
+            b.setPadding(0, 0, 0, 0)
+            b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             b.backgroundTintList = ColorStateList.valueOf(KEY_COLOR)
             b.setOnClickListener { onClick(b) }
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(44))
-            lp.marginEnd = dp(4)
-            row.addView(b, lp)
+            return b
         }
-        add("Esc") { pressKey("Escape") }
-        add("Tab") { pressKey("Tab") }
-        for ((label, code) in MOD_KEYS) add(label) { toggleMod(code, it) }
-        for ((label, code) in NAV_KEYS) add(label) { pressKey(code) }
-        for (i in 1..12) add("F$i") { pressKey("F$i") }
+        val main = ArrayList<MaterialButton>()
+        main += key("Esc") { pressKey("Escape") }
+        main += key("Tab") { pressKey("Tab") }
+        for ((label, code) in MOD_KEYS) main += key(label) { toggleMod(code, it) }
+        main += key("Del") { pressKey("Delete") }
+        keyGroups.add(main)
+        keyGroups.add(NAV_KEYS.map { (label, code) -> key(label) { pressKey(code) } })
+        keyGroups.add((1..12).map { i -> key("F$i") { pressKey("F$i") } })
+        layoutPcKeys()
+    }
+
+    /** Hamma tugma ekranga sig'sin: yotiq ekranda 2 qator, tik ekranda 3 qator, teng enli tugmalar. */
+    private fun layoutPcKeys() {
+        keysBar.removeAllViews()
+        for (group in keyGroups) for (b in group) (b.parent as? ViewGroup)?.removeView(b)
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val rows = if (landscape) listOf(keyGroups[0] + keyGroups[1], keyGroups[2]) else keyGroups
+        for (keys in rows) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for (b in keys) {
+                val lp = LinearLayout.LayoutParams(0, dp(34), 1f)
+                lp.setMargins(dp(2), dp(2), dp(2), dp(2))
+                row.addView(b, lp)
+            }
+            keysBar.addView(
+                row,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+            )
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        layoutPcKeys()  // telefon burilganda qatorlarni qayta joylash
     }
 
     /** Modifikatorni yoqadi/o'chiradi. Yolg'iz Win yoqib-o'chirilsa — Start menyu ochiladi. */
@@ -380,7 +415,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         )
         private val NAV_KEYS = listOf(
             "←" to "ArrowLeft", "↑" to "ArrowUp", "↓" to "ArrowDown", "→" to "ArrowRight",
-            "Del" to "Delete", "Home" to "Home", "End" to "End", "PgUp" to "PageUp", "PgDn" to "PageDown",
+            "Home" to "Home", "End" to "End", "PgUp" to "PageUp", "PgDn" to "PageDown",
         )
 
         /** Belgi -> W3C fizik tugma kodi (modifikator bilan yuborish uchun). Topilmasa null. */
