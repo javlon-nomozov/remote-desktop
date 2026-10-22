@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  RENDER_URL: https://remote-desktop-backend.onrender.com
+  RENDER_URL: https://remote-desktop-backend-1lfo.onrender.com
 
 jobs:
   ping:
