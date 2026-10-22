@@ -1,6 +1,6 @@
 """Faza 2 MVP transport: WebSocket + JPEG stream (server tomoni).
 
-Server ekranni JPEG kadrlar sifatida viewerга yuboradi va viewerдан kelgan input
+Server ekranni JPEG kadrlar sifatida viewerga yuboradi va viewerdan kelgan input
 hodisalarini (PROTOCOL.md §2) qabul qilib qurilmaga qo'llaydi. Bu to'liq zanjirni
 (capture -> stream -> input injection) darhol ishlatib ko'rsatadi. Past kechikishli
 H.264/WebRTC keyingi bosqich (aiortc) — bir xil input protokol saqlanadi.
@@ -103,7 +103,7 @@ class StreamServer:
         sender = threading.Thread(target=self._send_frames, args=(ws, stop), daemon=True)
         sender.start()
         try:
-            for msg in ws:  # viewerдан kelgan input hodisalari
+            for msg in ws:  # viewerdan kelgan input hodisalari
                 if isinstance(msg, (bytes, bytearray)):
                     continue  # viewer binary yubormaydi
                 try:

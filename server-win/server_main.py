@@ -1,6 +1,6 @@
 """Server (boshqariladigan Windows mashina) — to'liq ishga tushirish.
 
-Ekranni stream qiladi, viewerдан input qabul qiladi, ko'rinadigan "faol" indikatorni
+Ekranni stream qiladi, viewerdan input qabul qiladi, ko'rinadigan "faol" indikatorni
 yoqadi. Yopilsa — sessiya to'xtaydi (fon xizmati yo'q).
 
 Ishlatish:

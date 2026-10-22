@@ -33,12 +33,39 @@
             android:text="⌨" />
 
         <Button
+            android:id="@+id/btnScreenshot"
+            style="?android:attr/buttonStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📷" />
+
+        <Button
             android:id="@+id/btnDisconnect"
             style="?android:attr/buttonStyleSmall"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="✕" />
     </LinearLayout>
+
+    <!-- Kompyuter tugmalari (⌨ bosilganda ko'rinadi): Esc, Tab, Ctrl, Alt, Shift, Win, strelkalar,
+         F1-F12... Tugmalar ViewerActivity'da yaratiladi. Tepada — ekran klaviaturasi uni yopmaydi. -->
+    <HorizontalScrollView
+        android:id="@+id/keysBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginTop="60dp"
+        android:background="#88000000"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/keysRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="4dp" />
+    </HorizontalScrollView>
 
     <!-- Touchpad tugmalari (faqat touchpad rejimida ko'rinadi): Chap · GYRO · O'ng -->
     <LinearLayout

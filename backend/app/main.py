@@ -31,7 +31,7 @@ _basic = HTTPBasic()
 @app.on_event("startup")
 async def _startup() -> None:
     init_db()
-    # Botni shu jarayonда ishga tushiramiz (Railway'да bitta xizmat kifoya).
+    # Botni shu jarayonda ishga tushiramiz (Railway'da bitta xizmat kifoya).
     if settings.run_bot and settings.bot_token:
         from .bot.handlers import build_router
         from .bot.loader import bot, dp

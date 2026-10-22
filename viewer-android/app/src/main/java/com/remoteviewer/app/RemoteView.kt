@@ -22,7 +22,7 @@ import kotlin.math.abs
  *    tugma kombinatsiyasiga map qiladi: 4-barmoq L/R -> oyna almashtirish, 3-barmoq yuqoriga
  *    -> Task View, va h.k.). Bu touchscreen OS-gesturasiga tayanmaydi — ishonchli.
  *
- * touchpad rejimida esa bitta barmoq nisbiy kursor; tap = chap klик.
+ * touchpad rejimida esa bitta barmoq nisbiy kursor; tap = chap klik.
  */
 class RemoteView @JvmOverloads constructor(
     context: Context,
@@ -213,7 +213,7 @@ class RemoteView @JvmOverloads constructor(
                     .put("dy", dy.toDouble()).put("buttons", 0).put("mode", "rel"))
             }
             MotionEvent.ACTION_UP -> {
-                // tap -> chap klик
+                // tap -> chap klik
                 send(JSONObject().put("t", "mouse").put("dx", 0.0).put("dy", 0.0)
                     .put("buttons", 1).put("mode", "rel"))
                 send(JSONObject().put("t", "mouse").put("dx", 0.0).put("dy", 0.0)

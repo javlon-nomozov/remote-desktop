@@ -33,6 +33,8 @@ POINTER_FLAG_INCONTACT = 0x00000004
 POINTER_FLAG_DOWN = 0x00010000
 POINTER_FLAG_UPDATE = 0x00020000
 POINTER_FLAG_UP = 0x00040000
+_FLAGS_DOWN = POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
+_FLAGS_UPDATE = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
 
 # TOUCH_MASK
 TOUCH_MASK_NONE = 0x00000000
@@ -156,26 +158,28 @@ class TouchInjector:
         """
         frame: dict[int, Contact] = {}
         flags: dict[int, int] = {}
+        prev = dict(self._active)
 
         # 1) Hozirda tushib turgan barmoqlarni "update" sifatida saqlab qolamiz
         for cid, (x, y, p) in self._active.items():
             frame[cid] = Contact(cid, x, y, state="move", pressure=p)
-            flags[cid] = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
+            flags[cid] = _FLAGS_UPDATE
 
-        # 2) Kelgan o'zgarishlarni qo'llaymiz
+        # 2) Kelgan o'zgarishlarni qo'llaymiz. Windows qat'iy: faol bo'lmagan id uchun move/up,
+        #    faol id uchun takroriy down, yoki oxirgi joydan boshqa joyda up -> ERROR_INVALID_PARAMETER.
+        #    Shuning uchun holatni o'zimiz moslaymiz.
         for c in contacts:
-            if c.state == "down":
-                flags[c.id] = POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
-                frame[c.id] = c
-                self._active[c.id] = (c.x, c.y, c.pressure)
-            elif c.state == "move":
-                flags[c.id] = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
-                frame[c.id] = c
-                self._active[c.id] = (c.x, c.y, c.pressure)
-            elif c.state == "up":
+            active = c.id in self._active
+            if c.state == "up":
+                if not active:
+                    continue
+                x, y, p = self._active.pop(c.id)
                 flags[c.id] = POINTER_FLAG_UP
-                frame[c.id] = Contact(c.id, c.x, c.y, state="up", pressure=c.pressure)
-                self._active.pop(c.id, None)
+                frame[c.id] = Contact(c.id, x, y, state="up", pressure=p)  # oxirgi joyda
+            else:
+                flags[c.id] = _FLAGS_UPDATE if active else _FLAGS_DOWN
+                frame[c.id] = c
+                self._active[c.id] = (c.x, c.y, c.pressure)
 
         if not frame:
             return
@@ -183,12 +187,20 @@ class TouchInjector:
         ordered = list(frame.values())
         arr = self._build(ordered, flags)
         if not user32.InjectTouchInput(len(ordered), arr):
-            raise ctypes.WinError(ctypes.get_last_error())
+            err = ctypes.get_last_error()
+            self._release(prev)  # Windows'dagi eski kontaktlarni bo'shatamiz, holat toza boshlanadi
+            self._active.clear()
+            raise ctypes.WinError(err)
+
+    def _release(self, contacts: dict[int, tuple[int, int, float]]) -> None:
+        """Berilgan kontaktlarni oxirgi joyida "up" qiladi (xatolarga e'tiborsiz)."""
+        if not contacts:
+            return
+        ups = [Contact(cid, x, y, state="up", pressure=p) for cid, (x, y, p) in contacts.items()]
+        arr = self._build(ups, {c.id: POINTER_FLAG_UP for c in ups})
+        user32.InjectTouchInput(len(ups), arr)
 
     def cancel_all(self) -> None:
         """Barcha faol barmoqlarni darhol ko'tarish (xavfsiz tozalash)."""
-        if not self._active:
-            return
-        ups = [Contact(cid, x, y, state="up", pressure=p) for cid, (x, y, p) in self._active.items()]
-        self.update(ups)
+        self._release(self._active)
         self._active.clear()

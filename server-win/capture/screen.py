@@ -63,9 +63,9 @@ class ScreenCapture:
         if self._kind == "dxcam":
             return self._backend.get_latest_frame()
         shot = self._mss.grab(self._mon)
-        # mss BGRA beradi → BGR
-        arr = np.frombuffer(shot.rgb, dtype=np.uint8)  # mss.rgb aslida BGR tartibda
-        return arr.reshape((shot.height, shot.width, 3))
+        # mss BGRA beradi → BGR. (shot.rgb EMAS — u R,G,B tartibda, ranglar almashib qoladi.)
+        arr = np.frombuffer(shot.bgra, dtype=np.uint8)
+        return arr.reshape((shot.height, shot.width, 4))[:, :, :3]
 
     def frames(self) -> Iterator[np.ndarray]:
         """target_fps ga yaqin tezlikda kadrlar generatori."""

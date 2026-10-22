@@ -19,7 +19,7 @@ import java.io.IOException
 import java.util.UUID
 
 /**
- * Kirish ekrani: "Telegram orqali kirish" tugmasi. Tugmaча Telegram bot ochiladi, foydalanuvchi
+ * Kirish ekrani: "Telegram orqali kirish" tugmasi. Tugmacha Telegram bot ochiladi, foydalanuvchi
  * telefon raqamini ulashib tasdiqlaydi, so'ng ilovaga qaytadi. Ilova backenddan tokenni oladi.
  */
 class LoginActivity : AppCompatActivity() {
@@ -55,7 +55,7 @@ class LoginActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (nonce == null) nonce = prefs.getString("nonce", null)
-        if (nonce != null) poll(false)  // Telegramдan qaytganда avtomatik tekshiramiz
+        if (nonce != null) poll(false)  // Telegramdan qaytganda avtomatik tekshiramiz
     }
 
     private fun poll(manual: Boolean) {

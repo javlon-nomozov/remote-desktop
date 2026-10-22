@@ -6,9 +6,9 @@ sichqoncha/touch hodisasi to'g'ridan-to'g'ri tagidagi oynaga o'tadi (WS_EX_TRANS
 Rejimlar: "dot" (yashil nuqta, sekin "nafas oladi") yoki "watermark" (~50% yozuv).
 
 Ikki ishlatish usuli:
-  - `start()` / `stop()` — alohida threadда o'z Tk mainloop'i bilan (konsol server uchun).
+  - `start()` / `stop()` — alohida threadda o'z Tk mainloop'i bilan (konsol server uchun).
   - `attach(parent)` / `detach()` — mavjud Tk root'ining Toplevel'i sifatida (GUI ilova uchun,
-    asosiy threadда chaqiriladi). Shunda bitta Tk bo'ladi.
+    asosiy threadda chaqiriladi). Shunda bitta Tk bo'ladi.
 """
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ import tkinter as tk
 from ctypes import wintypes
 
 _CHROMA = "#ff00ff"  # fon uchun chroma-key (magenta — ishonchli colorkey)
+_GREEN = "#22c55e"
+# Watermark matni anti-aliasing bilan chiziladi: chetidagi piksellar fon bilan aralashadi. Fon magenta
+# bo'lsa pushti hoshiya qoladi, shuning uchun watermark foni matn rangiga juda yaqin (lekin teng emas).
+_CHROMA_TEXT = "#21c45d"
 
 # Win32 — click-through
 GWL_EXSTYLE = -20
@@ -25,7 +29,6 @@ WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_TOPMOST = 0x00000008
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _LONG_PTR = ctypes.c_ssize_t
@@ -48,12 +51,15 @@ _user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 
 
 def _make_click_through(hwnd: int) -> None:
-    """Oynani va uning top-level ajdodini click-through qiladi."""
+    """Oynaning top-level ajdodini (Tk wrapper) click-through qiladi.
+
+    MUHIM: uslub FAQAT top-level'ga. Tk'ning ichki child oynasiga WS_EX_LAYERED qo'yilsa, u
+    umuman chizilmaydi va indikator qora to'rtburchak bo'lib ko'rinadi.
+    """
     top = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd
-    bits = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
-    for h in {hwnd, top}:
-        cur = _get_wl(h, GWL_EXSTYLE)
-        _set_wl(h, GWL_EXSTYLE, cur | bits)
+    bits = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+    cur = _get_wl(top, GWL_EXSTYLE)
+    _set_wl(top, GWL_EXSTYLE, cur | bits)
 
 
 class Indicator:
@@ -61,6 +67,7 @@ class Indicator:
         self.mode = mode
         self.dot_size = dot_size
         self.margin = margin
+        self._chroma = _CHROMA_TEXT if mode == "watermark" else _CHROMA
         self._thread: threading.Thread | None = None
         self._win: tk.Misc | None = None  # Tk (threaded) yoki Toplevel (attached)
         self._stop = threading.Event()
@@ -96,7 +103,7 @@ class Indicator:
 
     # --- attached (GUI) ------------------------------------------------
     def attach(self, parent: tk.Misc) -> None:
-        """GUI root'ining Toplevel'i sifatida ko'rsatadi (asosiy threadда)."""
+        """GUI root'ining Toplevel'i sifatida ko'rsatadi (asosiy threadda)."""
         self._stop.clear()
         win = tk.Toplevel(parent)
         self._win = win
@@ -115,9 +122,9 @@ class Indicator:
     def _setup(self, win: tk.Misc) -> None:
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.config(bg=_CHROMA)
+        win.config(bg=self._chroma)
         try:
-            win.attributes("-transparentcolor", _CHROMA)
+            win.attributes("-transparentcolor", self._chroma)
         except tk.TclError:
             pass
         if self.mode == "watermark":
@@ -132,7 +139,7 @@ class Indicator:
         # MUHIM: SetWindowLong (yuqorida) tkinter colorkey'ini reset qiladi — qayta qo'llaymiz,
         # aks holda fon shaffof bo'lmay, qora/magenta to'rtburchak ko'rinadi.
         try:
-            win.attributes("-transparentcolor", _CHROMA)
+            win.attributes("-transparentcolor", self._chroma)
         except Exception:
             pass
 
@@ -145,9 +152,9 @@ class Indicator:
         y = self.margin
         win.geometry(f"{size}x{size}+{x}+{y}")
         win.attributes("-alpha", 1.0)
-        cv = tk.Canvas(win, width=size, height=size, bg=_CHROMA, highlightthickness=0)
+        cv = tk.Canvas(win, width=size, height=size, bg=self._chroma, highlightthickness=0)
         cv.pack()
-        cv.create_oval(pad, pad, pad + s, pad + s, fill="#22c55e", outline="")
+        cv.create_oval(pad, pad, pad + s, pad + s, fill=_GREEN, outline="")
         self._animate_dot()
 
     def _animate_dot(self) -> None:
@@ -177,11 +184,11 @@ class Indicator:
         sh = win.winfo_screenheight()
         win.geometry(f"{sw}x{sh}+0+0")
         win.attributes("-alpha", 0.5)
-        cv = tk.Canvas(win, width=sw, height=sh, bg=_CHROMA, highlightthickness=0)
+        cv = tk.Canvas(win, width=sw, height=sh, bg=self._chroma, highlightthickness=0)
         cv.pack()
         text = "REMOTE SESSION ACTIVE"
         step = 260
         for gy in range(0, sh + step, step):
             for gx in range(0, sw + step, step):
-                cv.create_text(gx, gy, text=text, fill="#22c55e",
+                cv.create_text(gx, gy, text=text, fill=_GREEN,
                                font=("Segoe UI", 22, "bold"), angle=30)

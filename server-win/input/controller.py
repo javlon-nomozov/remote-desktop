@@ -26,6 +26,7 @@ class InputController:
         self.vx, self.vy, self.vw, self.vh = winapi.virtual_screen_rect()
         self._touch: TouchInjector | None = None  # kerak bo'lganda yaratamiz
         self._btn_state = 0  # bosilgan tugmalar bitmask
+        self._keys_down: set[str] = set()  # bosib turilgan klaviatura tugmalari (Ctrl/Alt/Win...)
 
     # --- koordinata map -------------------------------------------------
     def _to_px(self, nx: float, ny: float) -> tuple[int, int]:
@@ -88,7 +89,13 @@ class InputController:
 
     # --- keyboard -------------------------------------------------------
     def _on_key(self, msg: dict) -> None:
-        keyboard.key(str(msg.get("code", "")), bool(msg.get("down", False)))
+        code = str(msg.get("code", ""))
+        down = bool(msg.get("down", False))
+        if keyboard.key(code, down):
+            if down:
+                self._keys_down.add(code)
+            else:
+                self._keys_down.discard(code)
 
     # --- gestura (ko'p barmoq) ------------------------------------------
     def _on_gesture(self, msg: dict) -> None:
@@ -103,5 +110,11 @@ class InputController:
             if self._btn_state & btn:
                 mouse.button(btn, down=False)
         self._btn_state = 0
+        for code in list(self._keys_down):
+            try:
+                keyboard.key(code, False)
+            except OSError:
+                pass
+        self._keys_down.clear()
         if self._touch is not None:
             self._touch.cancel_all()

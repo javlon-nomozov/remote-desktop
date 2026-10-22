@@ -238,7 +238,7 @@ async def on_receipt(message: Message, state: FSMContext) -> None:
         payment = pay_svc.create_payment(s, user, plan, file_id, kind, promo_code=promo)
         cfg = AppSettings.get_or_create(s)
         currency = cfg.currency
-        # adminlarга yuborish uchun kerakli ma'lumotlarni olib qolamiz
+        # adminlarga yuborish uchun kerakli ma'lumotlarni olib qolamiz
         notice_link = f"{config.settings.public_base_url}/receipt/{payment.id}"
         notice_text = T.admin_payment_notice(user, plan, payment, currency, notice_link)
         pay_id = payment.id

@@ -1,7 +1,7 @@
 """Remote Server — zamonaviy GUI (CustomTkinter).
 
 Terminalsiz (exe --windowed): faqat bitta oyna. Yopilsa — toza to'xtaydi. Backend manzili
-ilovaга singdirilgan (app_config.BACKEND_URL) — foydalanuvchi hech narsa kiritmaydi, faqat
+ilovaga singdirilgan (app_config.BACKEND_URL) — foydalanuvchi hech narsa kiritmaydi, faqat
 "Boshlash" bosadi va unique KOD ko'rinadi.
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ class ServerApp:
                                      font=ctk.CTkFont(family="Consolas", size=30, weight="bold"),
                                      text_color=ACCENT)
         self.code_lbl.pack()
-        self.hint = ctk.CTkLabel(self.root, text="Telefonда shu kodni kiriting",
+        self.hint = ctk.CTkLabel(self.root, text="Telefonda shu kodni kiriting",
                                  text_color="#888", wraplength=400)
         self.hint.pack()
 
@@ -206,6 +206,11 @@ class ServerApp:
                         self.status.configure(text="Viewer ulandi ✓", text_color=GREEN)
                     elif val == "viewer_disconnected":
                         self.status.configure(text="Tayyor (kutilmoqda)", text_color=GREEN)
+                        if self.controller is not None:  # bosilib qolgan tugma/barmoqlarni bo'shatish
+                            try:
+                                self.controller.reset()
+                            except Exception:
+                                pass
                 elif kind == "error":
                     self.status.configure(text="Xato: " + val, text_color="#e05555")
                     self.code_lbl.configure(text="— — —")
@@ -224,7 +229,25 @@ class ServerApp:
         self.root.mainloop()
 
 
+def _redirect_output_to_log() -> None:
+    """Windowed exe'da konsol yo'q (sys.stdout = None) — print/xatolar log faylga yozilsin.
+    Fayl: %LOCALAPPDATA%\\RemoteServer\\server.log (1 MB dan oshsa yangidan boshlanadi)."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        d = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "RemoteServer")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "server.log")
+        mode = "w" if os.path.exists(path) and os.path.getsize(path) > 1_000_000 else "a"
+        f = open(path, mode, encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or f
+        sys.stderr = sys.stderr or f
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _redirect_output_to_log()
     ServerApp().run()
 
 

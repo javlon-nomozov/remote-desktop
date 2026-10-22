@@ -95,7 +95,7 @@ class RelayHost:
                     self.code = data["code"]
                     pretty = data.get("pretty", self.code)
                     print(f"\n======== ULANISH KODI: {pretty} ========")
-                    print("Telefonда shu kodni kiriting.\n")
+                    print("Telefonda shu kodni kiriting.\n")
                     if self.on_code:
                         self.on_code(data)
 
@@ -123,7 +123,11 @@ class RelayHost:
                             if self.on_status:
                                 self.on_status("viewer_disconnected")
                         elif self.on_input is not None:
-                            self.on_input(d)
+                            # input xatosi (masalan InjectTouchInput rad etsa) sessiyani yiqitmasin
+                            try:
+                                self.on_input(d)
+                            except Exception as e:
+                                print(f"[relay] input xato: {e}")
                 finally:
                     stop.set()
         finally:

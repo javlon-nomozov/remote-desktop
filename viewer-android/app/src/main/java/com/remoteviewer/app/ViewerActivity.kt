@@ -1,14 +1,24 @@
 package com.remoteviewer.app
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ContentValues
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.MediaScannerConnection
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -18,7 +28,15 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
 import org.json.JSONObject
+import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventListener {
 
@@ -26,6 +44,15 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     private lateinit var client: StreamClient
     private lateinit var hiddenInput: EditText
     private lateinit var touchpadBar: LinearLayout
+    private lateinit var keysBar: View
+
+    // Kompyuter tugmalari: yoniq (yopishqoq) modifikatorlar, code -> tugma.
+    // Keyingi oddiy tugma/harfdan keyin avtomatik qo'yib yuboriladi (Ctrl+C, Win+R, Alt+F4...).
+    private val heldMods = LinkedHashMap<String, MaterialButton>()
+
+    // Screenshot: oxirgi kelgan JPEG kadr (qayta siqilmasdan saqlanadi)
+    @Volatile private var lastJpeg: ByteArray? = null
+    private var pendingShot: ByteArray? = null  // Android 9 va past: ruxsat kutilayotgan kadr
 
     // Gyroskop (air-mouse)
     private lateinit var sensorManager: SensorManager
@@ -45,6 +72,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         view = findViewById(R.id.remoteView)
         hiddenInput = findViewById(R.id.hiddenInput)
         touchpadBar = findViewById(R.id.touchpadBar)
+        keysBar = findViewById(R.id.keysBar)
 
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
@@ -74,14 +102,23 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
             if (!view.touchpadMode) stopGyro()  // touch rejimiga qaytganda gyroni o'chiramiz
         }
         findViewById<Button>(R.id.btnKeyboard).setOnClickListener {
-            hiddenInput.requestFocus()
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(hiddenInput, InputMethodManager.SHOW_IMPLICIT)
+            if (keysBar.visibility == View.VISIBLE) {
+                keysBar.visibility = View.GONE
+                releaseMods()
+                imm.hideSoftInputFromWindow(hiddenInput.windowToken, 0)
+            } else {
+                keysBar.visibility = View.VISIBLE
+                hiddenInput.requestFocus()
+                imm.showSoftInput(hiddenInput, InputMethodManager.SHOW_IMPLICIT)
+            }
         }
+        findViewById<Button>(R.id.btnScreenshot).setOnClickListener { saveScreenshot() }
         findViewById<Button>(R.id.btnDisconnect).setOnClickListener { finish() }
 
         setupTouchpadButtons()
         setupKeyboardCapture()
+        setupPcKeys()
 
         client = StreamClient(url, handshake, this)
         client.connect()
@@ -159,7 +196,15 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (s != null && count > before) {
                     val added = s.subSequence(start + before, start + count).toString()
-                    client.send(JSONObject().put("t", "text").put("value", added).toString())
+                    // Modifikator yoniq bo'lsa harf fizik tugma sifatida ketadi: unicode matn
+                    // Ctrl/Alt/Win bilan ishlamaydi (Ctrl+C, Win+R uchun KeyC/KeyR kerak).
+                    val code = if (heldMods.isNotEmpty() && added.length == 1) charToCode(added[0]) else null
+                    if (code != null) {
+                        pressKey(code)
+                    } else {
+                        client.send(JSONObject().put("t", "text").put("value", added).toString())
+                        releaseMods()
+                    }
                 }
             }
             override fun afterTextChanged(s: Editable?) {
@@ -169,17 +214,138 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         hiddenInput.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
-                    KeyEvent.KEYCODE_DEL -> { sendKey("Backspace"); return@setOnKeyListener true }
-                    KeyEvent.KEYCODE_ENTER -> { sendKey("Enter"); return@setOnKeyListener true }
+                    KeyEvent.KEYCODE_DEL -> { pressKey("Backspace"); return@setOnKeyListener true }
+                    KeyEvent.KEYCODE_ENTER -> { pressKey("Enter"); return@setOnKeyListener true }
                 }
             }
             false
         }
     }
 
-    private fun sendKey(code: String) {
-        client.send(JSONObject().put("t", "key").put("code", code).put("down", true).toString())
-        client.send(JSONObject().put("t", "key").put("code", code).put("down", false).toString())
+    // --- Kompyuter tugmalari paneli -----------------------------------
+    private fun setupPcKeys() {
+        val row = findViewById<LinearLayout>(R.id.keysRow)
+        fun add(label: String, onClick: (MaterialButton) -> Unit) {
+            val b = MaterialButton(this)
+            b.text = label
+            b.isAllCaps = false
+            b.minWidth = 0
+            b.minimumWidth = 0
+            b.minHeight = 0
+            b.minimumHeight = 0
+            b.insetTop = 0
+            b.insetBottom = 0
+            b.setPadding(dp(12), 0, dp(12), 0)
+            b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            b.backgroundTintList = ColorStateList.valueOf(KEY_COLOR)
+            b.setOnClickListener { onClick(b) }
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(44))
+            lp.marginEnd = dp(4)
+            row.addView(b, lp)
+        }
+        add("Esc") { pressKey("Escape") }
+        add("Tab") { pressKey("Tab") }
+        for ((label, code) in MOD_KEYS) add(label) { toggleMod(code, it) }
+        for ((label, code) in NAV_KEYS) add(label) { pressKey(code) }
+        for (i in 1..12) add("F$i") { pressKey("F$i") }
+    }
+
+    /** Modifikatorni yoqadi/o'chiradi. Yolg'iz Win yoqib-o'chirilsa — Start menyu ochiladi. */
+    private fun toggleMod(code: String, b: MaterialButton) {
+        if (heldMods.remove(code) != null) {
+            keyEvent(code, false)
+            b.backgroundTintList = ColorStateList.valueOf(KEY_COLOR)
+        } else {
+            heldMods[code] = b
+            keyEvent(code, true)
+            b.backgroundTintList = ColorStateList.valueOf(MOD_ON_COLOR)
+        }
+    }
+
+    /** Oddiy tugma: bosib qo'yib yuboradi, keyin yoniq modifikatorlarni bo'shatadi. */
+    private fun pressKey(code: String) {
+        keyEvent(code, true)
+        keyEvent(code, false)
+        releaseMods()
+    }
+
+    private fun releaseMods() {
+        for ((code, b) in heldMods.entries.reversed()) {
+            keyEvent(code, false)
+            b.backgroundTintList = ColorStateList.valueOf(KEY_COLOR)
+        }
+        heldMods.clear()
+    }
+
+    private fun keyEvent(code: String, down: Boolean) {
+        client.send(JSONObject().put("t", "key").put("code", code).put("down", down).toString())
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    // --- Screenshot -> galereya ---------------------------------------
+    private fun saveScreenshot() {
+        val data = lastJpeg
+        if (data == null) {
+            Toast.makeText(this, "Hali ekran kelmadi", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingShot = data
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQ_STORAGE
+            )
+            return
+        }
+        writeScreenshot(data)
+    }
+
+    private fun writeScreenshot(data: ByteArray) {
+        val name = "Remote_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".jpg"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/RemoteViewer")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IOException("MediaStore")
+                contentResolver.openOutputStream(uri)?.use { it.write(data) } ?: throw IOException("stream")
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            } else {
+                @Suppress("DEPRECATION")
+                val pictures = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                val dir = File(pictures, "RemoteViewer")
+                dir.mkdirs()
+                val f = File(dir, name)
+                f.writeBytes(data)
+                MediaScannerConnection.scanFile(this, arrayOf(f.absolutePath), arrayOf("image/jpeg"), null)
+            }
+            Toast.makeText(this, "Saqlandi: Galereya → RemoteViewer", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Saqlab bo'lmadi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_STORAGE) return
+        val data = pendingShot
+        pendingShot = null
+        if (data != null && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            writeScreenshot(data)
+        } else {
+            Toast.makeText(this, "Ruxsat berilmadi", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // --- StreamClient.Listener ----------------------------------------
@@ -188,6 +354,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     }
 
     override fun onFrame(data: ByteArray) {
+        lastJpeg = data
         val bmp = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return
         view.setFrame(bmp)
     }
@@ -199,6 +366,43 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     override fun onDestroy() {
         super.onDestroy()
         stopGyro()
+        releaseMods()  // kompyuterda Ctrl/Alt/Win bosilib qolmasin
         client.close()
+    }
+
+    companion object {
+        private const val REQ_STORAGE = 41
+        private val KEY_COLOR = Color.parseColor("#37474F")
+        private val MOD_ON_COLOR = Color.parseColor("#F57C00")  // yoniq modifikator
+
+        private val MOD_KEYS = listOf(
+            "Ctrl" to "ControlLeft", "Alt" to "AltLeft", "Shift" to "ShiftLeft", "Win" to "MetaLeft",
+        )
+        private val NAV_KEYS = listOf(
+            "←" to "ArrowLeft", "↑" to "ArrowUp", "↓" to "ArrowDown", "→" to "ArrowRight",
+            "Del" to "Delete", "Home" to "Home", "End" to "End", "PgUp" to "PageUp", "PgDn" to "PageDown",
+        )
+
+        /** Belgi -> W3C fizik tugma kodi (modifikator bilan yuborish uchun). Topilmasa null. */
+        private fun charToCode(ch: Char): String? {
+            val c = ch.lowercaseChar()
+            return when (c) {
+                in 'a'..'z' -> "Key" + c.uppercaseChar()
+                in '0'..'9' -> "Digit$c"
+                ' ' -> "Space"
+                '-' -> "Minus"
+                '=' -> "Equal"
+                '[' -> "BracketLeft"
+                ']' -> "BracketRight"
+                '\\' -> "Backslash"
+                ';' -> "Semicolon"
+                '\'' -> "Quote"
+                '`' -> "Backquote"
+                ',' -> "Comma"
+                '.' -> "Period"
+                '/' -> "Slash"
+                else -> null
+            }
+        }
     }
 }

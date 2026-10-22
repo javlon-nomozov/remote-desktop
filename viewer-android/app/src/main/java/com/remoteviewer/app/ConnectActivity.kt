@@ -9,7 +9,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
 /**
- * Asosiy ekran (login'dan keyin): faqat unique KOD so'raladi. Server manzili Config'да.
+ * Asosiy ekran (login'dan keyin): faqat unique KOD so'raladi. Server manzili Config'da.
  */
 class ConnectActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
