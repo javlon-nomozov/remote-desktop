@@ -27,6 +27,7 @@ class RelayHost:
         scale: float = 1.0,
         on_input: Optional[Callable[[dict], None]] = None,
         on_code: Optional[Callable[[dict], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.url = relay_url.rstrip("/") + "/relay/host"
         self.fps = fps
@@ -34,9 +35,20 @@ class RelayHost:
         self.scale = scale
         self.on_input = on_input
         self.on_code = on_code
+        self.on_status = on_status
         self.code: Optional[str] = None
         self._present = threading.Event()  # viewer ulanganmi
         self._cap: Optional[ScreenCapture] = None
+        self._ws = None
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            if self._ws is not None:
+                self._ws.close()
+        except Exception:
+            pass
 
     def _encode(self, frame) -> bytes:
         rgb = frame[:, :, ::-1]
@@ -77,6 +89,7 @@ class RelayHost:
         self._cap = ScreenCapture(target_fps=self.fps)
         try:
             with connect(self.url, max_size=None, open_timeout=15) as ws:
+                self._ws = ws
                 data = json.loads(ws.recv())
                 if data.get("t") == "code":
                     self.code = data["code"]
@@ -102,9 +115,13 @@ class RelayHost:
                             print("[relay] viewer ulandi")
                             self._present.set()
                             self._send_hello(ws)
+                            if self.on_status:
+                                self.on_status("viewer_connected")
                         elif t == "viewer_disconnected":
                             print("[relay] viewer uzildi")
                             self._present.clear()
+                            if self.on_status:
+                                self.on_status("viewer_disconnected")
                         elif self.on_input is not None:
                             self.on_input(d)
                 finally:

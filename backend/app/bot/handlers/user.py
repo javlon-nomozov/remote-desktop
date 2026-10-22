@@ -4,12 +4,18 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from sqlmodel import select
 
 from ... import config
 from ...db import get_session
-from ...models import AppSettings, Plan, Subscription, User, active_subscription
+from ...models import AppSettings, LoginNonce, Plan, Subscription, User, active_subscription
 from ... import payments as pay_svc
 from ... import users as user_svc
 from .. import keyboards as kb
@@ -20,6 +26,8 @@ from ..states import BuyFlow
 router = Router()
 
 _bot_username: str | None = None
+# telegram_id -> login nonce (/start login_<nonce> va contact orasida; bir jarayon)
+_login_pending: dict[int, str] = {}
 
 
 async def bot_username() -> str:
@@ -43,6 +51,17 @@ def _active_plans(session) -> list[Plan]:
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext) -> None:
     await state.clear()
     ref_code = (command.args or "").strip() or None
+    if ref_code and ref_code.startswith("login_"):
+        _login_pending[message.from_user.id] = ref_code[len("login_"):]
+        await message.answer(
+            "Ilovaga kirish uchun telefon raqamingizni ulashing (pastdagi tugma):",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="📱 Raqamni ulashish", request_contact=True)]],
+                resize_keyboard=True,
+                one_time_keyboard=True,
+            ),
+        )
+        return
     with get_session() as s:
         cfg = AppSettings.get_or_create(s)
         user, created = user_svc.get_or_create_user(
@@ -71,6 +90,37 @@ async def cmd_login(message: Message) -> None:
         f"<code>{token}</code>\n\n"
         "Ilovada (telefon/kompyuter) shu tokenni joylang. Hech kimga bermang.",
     )
+
+
+@router.message(F.contact)
+async def on_contact(message: Message) -> None:
+    """Telefon raqam ulashildi: hisobni tasdiqlab, login oqimi bo'lsa token beramiz."""
+    contact = message.contact
+    if contact.user_id and contact.user_id != message.from_user.id:
+        await message.answer("Iltimos, o'z raqamingizni ulashing.")
+        return
+    nonce = _login_pending.pop(message.from_user.id, None)
+    with get_session() as s:
+        user, _ = user_svc.get_or_create_user(
+            s, message.from_user.id, message.from_user.username, message.from_user.full_name
+        )
+        user.phone = contact.phone_number
+        s.add(user)
+        s.commit()
+        token = user_svc.ensure_login_token(s, user)
+        if nonce:
+            ln = s.get(LoginNonce, nonce)
+            if ln:
+                ln.token = token
+            else:
+                ln = LoginNonce(nonce=nonce, token=token)
+            s.add(ln)
+            s.commit()
+    if nonce:
+        await message.answer("✅ Tasdiqlandi! Endi ilovaga qayting.",
+                             reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("✅ Raqamingiz saqlandi.", reply_markup=ReplyKeyboardRemove())
 
 
 @router.callback_query(F.data == "menu")

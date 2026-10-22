@@ -35,6 +35,7 @@ class StreamServer:
         quality: int = 60,
         scale: float = 1.0,
         on_input: Optional[Callable[[dict], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -42,6 +43,15 @@ class StreamServer:
         self.quality = quality
         self.scale = scale
         self.on_input = on_input
+        self.on_status = on_status
+        self._server = None
+
+    def stop(self) -> None:
+        try:
+            if self._server is not None:
+                self._server.shutdown()
+        except Exception:
+            pass
 
     def _send_frames(self, ws, stop: threading.Event) -> None:
         cap = ScreenCapture(target_fps=self.fps)
@@ -87,6 +97,8 @@ class StreamServer:
     def _handler(self, ws) -> None:
         peer = getattr(ws, "remote_address", None)
         print(f"[stream] viewer ulandi: {peer}")
+        if self.on_status:
+            self.on_status("viewer_connected")
         stop = threading.Event()
         sender = threading.Thread(target=self._send_frames, args=(ws, stop), daemon=True)
         sender.start()
@@ -106,8 +118,11 @@ class StreamServer:
         finally:
             stop.set()
             print(f"[stream] viewer uzildi: {peer}")
+            if self.on_status:
+                self.on_status("viewer_disconnected")
 
     def serve(self) -> None:
         print(f"[stream] tinglanmoqda ws://{self.host}:{self.port}  (fps={self.fps}, q={self.quality})")
         with serve(self._handler, self.host, self.port, max_size=None) as server:
+            self._server = server
             server.serve_forever()

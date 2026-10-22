@@ -60,6 +60,7 @@ class User(SQLModel, table=True):
     telegram_id: int = Field(index=True, unique=True)
     username: Optional[str] = Field(default=None)
     full_name: str = Field(default="")
+    phone: Optional[str] = Field(default=None)
     referral_code: str = Field(default="", index=True)
     referred_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
     login_token: Optional[str] = Field(default=None, index=True)  # ilovaga kirish uchun
@@ -139,6 +140,17 @@ class Payment(SQLModel, table=True):
     note: str = Field(default="")             # rad etish sababi va h.k.
     created_at: NaiveDatetime = Field(default_factory=_now)
     decided_at: Optional[NaiveDatetime] = Field(default=None)
+
+
+class LoginNonce(SQLModel, table=True):
+    """Ilova login oqimi: bot token'ni shu yerga yozadi, web /auth/poll o'qiydi (bir martalik).
+    Bot va web alohida jarayon bo'lgani uchun ko'prik DB orqali."""
+
+    __tablename__ = "login_nonces"
+
+    nonce: str = Field(primary_key=True)
+    token: str
+    created_at: NaiveDatetime = Field(default_factory=_now)
 
 
 class BalanceTx(SQLModel, table=True):

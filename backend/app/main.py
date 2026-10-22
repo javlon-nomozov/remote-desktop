@@ -19,7 +19,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from .admin import setup_admin
 from .config import settings
 from .db import get_session, init_db
-from .models import Payment
+from .models import LoginNonce, Payment
 from .relay import router as relay_router
 
 app = FastAPI(title="Remote Desktop Backend")
@@ -49,6 +49,19 @@ def require_admin(creds: HTTPBasicCredentials = Depends(_basic)) -> bool:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/auth/poll")
+def auth_poll(nonce: str) -> dict:
+    """Ilova login holatini so'raydi. Bot tasdiqlagan bo'lsa token qaytadi (bir martalik)."""
+    with get_session() as s:
+        ln = s.get(LoginNonce, nonce)
+        if ln:
+            token = ln.token
+            s.delete(ln)
+            s.commit()
+            return {"token": token}
+    return {"pending": True}
 
 
 @app.get("/receipt/{payment_id}")
