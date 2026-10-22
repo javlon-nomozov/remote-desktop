@@ -1,0 +1,34 @@
+# Render Blueprint — backend (Docker). DB = Railway Postgres (tashqi).
+# Render Dashboard -> New -> Blueprint -> shu reponi ulang. Maxfiy env'larni (sync:false)
+# dashboardда kiriting. Yoki Render API kaliti bilan avtomatik sozlanadi.
+services:
+  - type: web
+    name: remote-desktop-backend
+    runtime: docker
+    repo: https://github.com/javlon-nomozov/remote-desktop
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: frankfurt
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: RUN_BOT
+        value: "true"
+      - key: RELAY_REQUIRE_SUBSCRIPTION
+        value: "false"
+      - key: ADMIN_PANEL_USER
+        value: "admin"
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: ADMIN_PANEL_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

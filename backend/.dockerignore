@@ -1,0 +1,12 @@
+.venv/
+.venv-build/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+.railway/
+.railwayignore
+railway.json
+Procfile
+.python-version
