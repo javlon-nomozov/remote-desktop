@@ -67,6 +67,16 @@
             android:textSize="15sp" />
 
         <TextView
+            android:id="@+id/lanHost"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:textColor="#22C55E"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
@@ -74,6 +84,24 @@
             android:text="Telefon va kompyuter bitta Wi-Fi'da bo'lsin. USB orqali: kabelni ulang va telefonda Sozlamalar → Ulanishlar → Mobil hotspot va modem → USB modem ni yoqing. Internet shart emas."
             android:textColor="#888888"
             android:textSize="13sp" />
+
+        <!-- Telefon ruxsat bergan kompyuterlar (muddat ichida so'rovsiz ulanadi) -->
+        <TextView
+            android:id="@+id/trustedTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="Ishonchli kompyuterlar"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/trustedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="vertical" />
 
         <Button
             android:id="@+id/btnLogout"

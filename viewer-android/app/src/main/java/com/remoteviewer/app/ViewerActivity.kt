@@ -64,6 +64,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     private var token = ""
     private var lanHost = ""
     private var lanPort = 0
+    private var pcId = ""  // LAN: shu kompyuterning takliflarigina qayta ulanishda qabul qilinadi
     private var approvedOnce = false   // shu ekranda kamida bir marta ruxsat olindi
     private var trustUntilMs = 0L      // ishonch muddati (0 = cheksiz/noma'lum)
     private var terminal = false       // rad / muddat / ✕ — qayta ulanmaymiz
@@ -107,8 +108,12 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         token = intent.getStringExtra("token") ?: ""
         lanHost = intent.getStringExtra("host") ?: ""
         lanPort = intent.getIntExtra("port", 0)
+        pcId = intent.getStringExtra("pc_id") ?: ""
+        // tiklangan ulanish: kompyuter hali yoqilmagan bo'lsa "topilmadi" deb chiqib ketmaymiz — kutamiz
+        approvedOnce = intent.getBooleanExtra("resume", false)
 
         view.onInput = { json -> client.send(json) }
+        view.touchpadButtons = { relButtons }  // "Chap"/"O'ng" ushlab turilsa — surish drag bo'ladi
 
         findViewById<Button>(R.id.btnMode).setOnClickListener {
             view.touchpadMode = !view.touchpadMode
@@ -132,6 +137,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         findViewById<Button>(R.id.btnDisconnect).setOnClickListener {
             terminal = true
             Device.blockAutoConnect(this, 60_000)  // kompyuter darhol qayta ulab qo'ymasin
+            clearResume()
             finish()
         }
 
@@ -160,6 +166,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
             client.connect(
                 "ws://$lanHost:$lanPort",
                 JSONObject().put("t", "viewer_hello").put("device_id", dev).put("device_name", name).toString(),
+                LanNet.networkFor(this, lanHost),  // Wi-Fi internetsiz bo'lsa ham shu tarmoq orqali
             )
         }
     }
@@ -175,6 +182,10 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
                 hideStatus()
                 stopLanSearch()
                 if (!visible) client.send(PAUSE)
+                // ilova yopilib qayta ochilsa ham shu ulanish tiklanadi (LAN — ishonchli kompyuter taklifi orqali)
+                if (mode == "relay") {
+                    getSharedPreferences("rv", MODE_PRIVATE).edit().putString(PREF_RESUME_CODE, code).apply()
+                }
             }
             "hello" -> title = "Remote ${o.optInt("w")}x${o.optInt("h")} @${o.optInt("fps")}fps"
             "rejected" -> end("Kompyuter ulanishni rad etdi")
@@ -232,15 +243,16 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
 
     private fun startLanSearch() {
         if (lanPresence != null) return
-        lanPresence = LanPresence(this, true) { host, port, _ ->
+        lanPresence = LanPresence(this, true, onInvite = { inv ->
             runOnUiThread {
                 if (terminal || client.isOpen) return@runOnUiThread
-                lanHost = host
-                lanPort = port
+                if (pcId.isNotEmpty() && inv.pcId != pcId) return@runOnUiThread  // boshqa kompyuter
+                lanHost = inv.host
+                lanPort = inv.port
                 attempt = 0
                 connectNow()
             }
-        }.also { it.start() }
+        }).also { it.start() }
     }
 
     private fun stopLanSearch() {
@@ -257,9 +269,14 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         statusView.visibility = View.GONE
     }
 
+    private fun clearResume() {
+        getSharedPreferences("rv", MODE_PRIVATE).edit().remove(PREF_RESUME_CODE).apply()
+    }
+
     private fun end(message: String) {
         if (terminal && isFinishing) return
         terminal = true
+        clearResume()
         handler.removeCallbacksAndMessages(null)
         stopLanSearch()
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
@@ -576,6 +593,8 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     }
 
     companion object {
+        /** Ilova qayta ochilganda tiklanadigan internet ulanishi kodi (✕ / rad / muddat tugashida o'chadi). */
+        const val PREF_RESUME_CODE = "resume_code"
         private const val REQ_STORAGE = 41
         private val PAUSE = JSONObject().put("t", "pause").toString()
         private val RESUME = JSONObject().put("t", "resume").toString()

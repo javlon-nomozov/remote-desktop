@@ -67,10 +67,15 @@ def lan_firewall_ok() -> bool | None:
     exe = exe_path()
     if not exe:
         return None
+    # Ruxsat BARCHA tarmoq turlarini (Domain=1, Private=2, Public=4; Any=0) qamrashi kerak: masalan faqat
+    # Public uchun ruxsat bo'lsa, uy Wi-Fi'si "Private" bo'lganda telefon ulana olmaydi.
     ps = ("$f=Get-NetFirewallApplicationFilter -Program $env:RS_EXE -ErrorAction SilentlyContinue;"
           "if(-not $f){'none';exit};"
           "$r=$f|Get-NetFirewallRule|?{$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound'};"
-          "if($r|?{$_.Action -eq 'Block'}){'block'}elseif($r|?{$_.Action -eq 'Allow'}){'allow'}else{'none'}")
+          "if($r|?{$_.Action -eq 'Block'}){'block';exit};"
+          "$p=0;foreach($x in ($r|?{$_.Action -eq 'Allow'})){$v=[int]$x.Profile;"
+          "if($v -eq 0){$p=7}else{$p=$p -bor $v}};"
+          "if(($p -band 7) -eq 7){'allow'}else{'partial'}")
     try:
         return _powershell(ps, env=dict(os.environ, RS_EXE=exe)) == "allow"
     except Exception as e:

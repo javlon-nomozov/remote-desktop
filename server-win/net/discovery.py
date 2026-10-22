@@ -7,12 +7,19 @@ Kompyuter ularni ro'yxatda ko'rsatadi. Tanlansa (yoki telefon ishonchli bo'lsa) 
     {"t":"rv_invite","host":<kompyuter IP>,"port":<LAN port>,"name":<kompyuter nomi>}  -> telefon UDP 47867
 Telefon taklifni olib `ws://host:port` ga ulanadi (net/stream_server.py).
 
+Kompyuter ham har 2 s o'z tarmoqlarining har biriga mayoq yuboradi:
+    {"t":"rv_host","name":..,"pc_id":..,"port":..}  -> telefon UDP 47867
+Telefon unga unicast `rv_phone` bilan javob beradi — broadcast bir tomonga to'silgan tarmoqlarda ham
+telefon ro'yxatga tushadi. `pc_id` (doimiy relay kodi) telefonda "ishonchli kompyuter"ni eslab qolish uchun.
+
 Bitta Wi-Fi, telefon hotspoti yoki USB modem (USB tethering) — hammasi oddiy lokal tarmoq.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import socket
+import subprocess
 import threading
 import time
 from typing import Callable, Optional
@@ -20,6 +27,7 @@ from typing import Callable, Optional
 DISCOVERY_PORT = 47866
 INVITE_PORT = 47867
 SEEN_TTL = 6.0  # shuncha soniya ko'rinmasa ro'yxatdan chiqadi
+BEACON_EVERY = 2.0
 
 
 def local_ip_for(peer_ip: str) -> str:
@@ -47,9 +55,35 @@ def lan_ips() -> list[str]:
     return out
 
 
+def local_ipv4_networks() -> list[ipaddress.IPv4Interface]:
+    """Kompyuterning lokal IPv4 manzillari maska bilan (har bir tarmoqqa alohida mayoq uchun).
+    Windows'da 255.255.255.255 faqat bitta interfeysdan chiqadi — shuning uchun har biriga yo'naltirilgan
+    broadcast kerak. PowerShell bo'lmasa /24 deb faraz qilinadi."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-NetIPAddress -AddressFamily IPv4 | ?{ $_.IPAddress -notlike '127.*' -and "
+             "$_.IPAddress -notlike '169.254.*' } | %{ $_.IPAddress + '/' + $_.PrefixLength }"],
+            capture_output=True, text=True, timeout=20, creationflags=0x08000000,
+        ).stdout
+        nets = [ipaddress.IPv4Interface(line.strip()) for line in out.splitlines() if line.strip()]
+        if nets:
+            return nets
+    except Exception:
+        pass
+    return [ipaddress.IPv4Interface(f"{ip}/24") for ip in lan_ips()]
+
+
 class Discovery:
-    def __init__(self, on_phone: Optional[Callable[[str, str, str, bool], None]] = None) -> None:
+    def __init__(
+        self,
+        on_phone: Optional[Callable[[str, str, str, bool], None]] = None,
+        pc_id: str = "",
+        port_fn: Callable[[], int] = lambda: 0,
+    ) -> None:
         self.on_phone = on_phone  # (device_id, device_name, ip, auto) — har bir signalda
+        self.pc_id = pc_id
+        self.port_fn = port_fn  # LAN ws port (band bo'lsa boshqasi tanlanadi)
         self.name = socket.gethostname()
         self._phones: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -70,7 +104,8 @@ class Discovery:
         host = local_ip_for(p["ip"])
         if not host:
             return False
-        msg = json.dumps({"t": "rv_invite", "host": host, "port": port, "name": self.name}).encode()
+        msg = json.dumps({"t": "rv_invite", "host": host, "port": port, "name": self.name,
+                          "pc_id": self.pc_id}).encode()
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             for _ in range(3):  # UDP — ishonch uchun bir necha marta
@@ -91,7 +126,27 @@ class Discovery:
         except OSError:
             pass
 
+    def _beacon_loop(self) -> None:
+        nets: list[ipaddress.IPv4Interface] = []
+        refreshed = 0.0
+        while not self._stop.is_set():
+            if time.time() - refreshed > 30:  # tarmoqlar o'zgarishi mumkin (USB modem ulanishi va h.k.)
+                nets = local_ipv4_networks()
+                refreshed = time.time()
+            msg = json.dumps({"t": "rv_host", "name": self.name, "pc_id": self.pc_id,
+                              "port": self.port_fn()}).encode()
+            for net in nets:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as b:
+                        b.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                        b.bind((str(net.ip), 0))
+                        b.sendto(msg, (str(net.network.broadcast_address), INVITE_PORT))
+                except OSError:
+                    pass
+            self._stop.wait(BEACON_EVERY)
+
     def run(self) -> None:
+        threading.Thread(target=self._beacon_loop, name="lan-beacon", daemon=True).start()
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind(("0.0.0.0", DISCOVERY_PORT))
         s.settimeout(1.0)

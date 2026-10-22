@@ -1,5 +1,6 @@
 package com.remoteviewer.app
 
+import android.net.Network
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -42,13 +43,15 @@ class StreamClient(private val listener: Listener) {
     @Volatile var isActive = false
         private set
 
+    /** [network] — lokal kompyuter uchun socket shu tarmoqqa bog'lanadi (Wi-Fi internetsiz bo'lsa ham). */
     @Synchronized
-    fun connect(url: String, handshake: String) {
+    fun connect(url: String, handshake: String, network: Network? = null) {
         ws?.cancel()
         isOpen = false
         isActive = true
         val my = ++gen
-        ws = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+        val c = if (network != null) client.newBuilder().socketFactory(network.socketFactory).build() else client
+        ws = c.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (my != gen) return
                 isOpen = true

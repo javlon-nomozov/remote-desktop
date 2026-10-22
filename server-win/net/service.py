@@ -15,7 +15,7 @@ import time
 from typing import Callable, Optional
 
 from .discovery import Discovery
-from .host_core import HostCore, Viewer
+from .host_core import HostCore, Viewer, host_identity
 from .relay_client import RelayHost
 from .stream_server import StreamServer
 
@@ -35,7 +35,8 @@ class HostService:
         self.core = HostCore(fps=fps, quality=quality, on_input=on_input,
                              ask_permission=ask_permission, on_event=on_event)
         self.lan = StreamServer(self.core)
-        self.discovery = Discovery(on_phone=self._on_phone)
+        self.discovery = Discovery(on_phone=self._on_phone, pc_id=host_identity()[0],
+                                   port_fn=lambda: self.lan.port)
         self.relay = (RelayHost(backend_url, self.core, on_code=on_code, on_status=on_relay_status)
                       if backend_url else None)
         self.lan_error: Optional[str] = None
@@ -70,8 +71,9 @@ class HostService:
 
     # --- lokal tarmoq --------------------------------------------------
     def connect_phone(self, device_id: str, name: str, seconds: Optional[int]) -> bool:
-        """GUI'da tanlangan telefonga ruxsat (ishonch) berib, taklif yuboradi."""
-        self.core.trust.grant(device_id, name, seconds)
+        """GUI'da tanlangan telefonga taklif yuboradi. Telefon (o'zida ruxsat berib) 2 daqiqa ichida
+        ulansa — so'rovsiz qabul qilinadi va shu muddatga ishonchli bo'ladi."""
+        self.core.preapprove(device_id, name, seconds)
         self._invited[device_id] = time.time()
         return self.discovery.invite(device_id, self.lan.port)
 

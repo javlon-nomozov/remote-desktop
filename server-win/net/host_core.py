@@ -164,6 +164,8 @@ class HostCore:
         self.trust = TrustStore()
         self._lock = threading.Lock()
         self._active: Optional[Viewer] = None
+        # kompyuterdan "Ulash" bosilgan telefonlar: device_id -> (name, soniya|None, amal qilish muddati)
+        self._preapproved: dict[str, tuple[str, Optional[int], float]] = {}
 
     @property
     def active(self) -> Optional[Viewer]:
@@ -175,6 +177,11 @@ class HostCore:
                 self.on_event(kind, v)
             except Exception as e:
                 print(f"[core] event xato: {e}")
+
+    def preapprove(self, device_id: str, name: str, seconds: Optional[int], ttl: float = 120.0) -> None:
+        """Kompyuter o'zi taklif qilgan telefon: ttl ichida ulansa so'rovsiz qabul qilinadi va
+        `seconds` muddatga ishonchli bo'ladi (telefon taklifni rad etsa — hech narsa saqlanmaydi)."""
+        self._preapproved[device_id] = (name, seconds, time.time() + ttl)
 
     # --- transportdan chaqiriladi ---------------------------------------
     def viewer_connected(self, v: Viewer) -> None:
@@ -192,6 +199,10 @@ class HostCore:
         t = self.trust.get(v.device_id)
         if t is not None:
             self._approve(v, t.get("until"))
+            return
+        pre = self._preapproved.pop(v.device_id, None) if v.device_id else None
+        if pre is not None and pre[2] > time.time():
+            self._approve(v, self.trust.grant(v.device_id, pre[0], pre[1]))
             return
         v.send({"t": "waiting_approval"})
         threading.Thread(target=self._ask, args=(v,), daemon=True).start()
