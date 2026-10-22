@@ -91,6 +91,7 @@ class PermissionDialog(ctk.CTkToplevel):
         self.timer = ctk.CTkLabel(self, text="", text_color=MUTED)
         self.timer.pack(pady=(10, 0))
         self.after(150, self._focus)
+        self.after(300, lambda: ServerApp._set_icon(self))
         self._tick()
 
     def _focus(self) -> None:
@@ -131,10 +132,8 @@ class ServerApp:
         self.root.title(app_config.APP_NAME)
         self.root.geometry("480x740")
         self.root.minsize(440, 520)
-        try:
-            self.root.iconbitmap(resource_path("logo.ico"))
-        except Exception:
-            pass
+        # CTk o'z ikonkasini ~200 ms keyin qo'yadi — logotipni undan keyin o'rnatamiz
+        self.root.after(300, lambda: self._set_icon(self.root))
 
         self.q: queue.Queue = queue.Queue()
         self.controller: InputController | None = None
@@ -142,9 +141,9 @@ class ServerApp:
         self.service: HostService | None = None
         self.running = False
         self._dialogs: dict[int, PermissionDialog] = {}
-        self._phone_ids: tuple = ()
+        self._phone_ids: tuple | None = None  # None — hali chizilmagan
         self._phone_dur: dict[str, ctk.StringVar] = {}
-        self._trust_snapshot: list = []
+        self._trust_snapshot: list | None = None
 
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -158,6 +157,13 @@ class ServerApp:
             self.root.after(300, self.root.iconify)
 
     # --- UI ---------------------------------------------------------------
+    @staticmethod
+    def _set_icon(win) -> None:
+        try:
+            win.iconbitmap(resource_path("logo.ico"))
+        except Exception:
+            pass
+
     def _card(self, parent, title: str) -> ctk.CTkFrame:
         card = ctk.CTkFrame(parent, corner_radius=14)
         card.pack(fill="x", padx=14, pady=7)
@@ -191,6 +197,14 @@ class ServerApp:
         self.relay_lbl.pack()
         self.lan_lbl = ctk.CTkLabel(st, text="", text_color=MUTED, wraplength=420)
         self.lan_lbl.pack(pady=(2, 6))
+        # Windows Firewall lokal tarmoqni bloklasa — ogohlantirish + ruxsat tugmasi (UAC)
+        self.fw_box = ctk.CTkFrame(st, fg_color="#3a2a10")
+        ctk.CTkLabel(self.fw_box, text="Windows Firewall telefonning Wi-Fi / USB orqali ulanishini bloklayapti.",
+                     text_color="#e0a030", wraplength=280, justify="left").pack(side="left", padx=10, pady=8)
+        self.fw_btn = ctk.CTkButton(self.fw_box, text="Ruxsat berish", width=110, command=self._allow_firewall)
+        self.fw_btn.pack(side="right", padx=10)
+        self._fw_anchor = ctk.CTkFrame(st, fg_color="transparent", height=0)  # fw_box shu joyga chiqadi
+        self._fw_anchor.pack(fill="x")
         sess = ctk.CTkFrame(st, fg_color="transparent")
         sess.pack(fill="x", padx=14, pady=(0, 12))
         self.dot = ctk.CTkLabel(sess, text="●", text_color="#555", font=ctk.CTkFont(size=16))
@@ -310,6 +324,7 @@ class ServerApp:
         self.btn.configure(text="To'xtatish", fg_color=RED, hover_color=RED_HOVER)
         self.relay_lbl.configure(text="Internetga ulanmoqda...", text_color=MUTED)
         self.root.after(800, self._update_lan_label)
+        self.root.after(1500, self._check_firewall)
 
     def _stop(self) -> None:
         if self.service is not None:
@@ -343,6 +358,13 @@ class ServerApp:
         else:
             ips = ", ".join(lan_ips()) or "tarmoq yo'q"
             self.lan_lbl.configure(text=f"Lokal: {self.service.discovery.name} · {ips}", text_color=MUTED)
+
+    def _check_firewall(self) -> None:
+        threading.Thread(target=lambda: self.q.put(("fw", autostart.lan_firewall_ok())), daemon=True).start()
+
+    def _allow_firewall(self) -> None:
+        self.fw_btn.configure(state="disabled", text="Kutilmoqda...")
+        threading.Thread(target=lambda: self.q.put(("fw", autostart.allow_lan_firewall())), daemon=True).start()
 
     def _kick(self) -> None:
         if self.service is not None:
@@ -395,6 +417,13 @@ class ServerApp:
                 kind = item[0]
                 if kind == "code":
                     self.code_lbl.configure(text=item[1])
+                elif kind == "fw":
+                    self.fw_btn.configure(state="normal", text="Ruxsat berish")
+                    if item[1] is False:
+                        if not self.fw_box.winfo_ismapped():
+                            self.fw_box.pack(fill="x", padx=14, pady=(0, 8), before=self._fw_anchor)
+                    else:
+                        self.fw_box.pack_forget()
                 elif kind == "relay":
                     if item[1] == "online":
                         self.relay_lbl.configure(text="Internet: ulangan", text_color=GREEN)
@@ -472,7 +501,7 @@ class ServerApp:
         ok = self.service.connect_phone(device_id, name, DURATIONS[dur])
         if not ok:
             self.sess_lbl.configure(text="Telefonga taklif yuborilmadi (tarmoqni tekshiring)")
-        self._trust_snapshot = []  # ro'yxatni yangilash
+        self._trust_snapshot = None  # ro'yxatni yangilash
 
     def _refresh_trusted(self, svc: HostService | None) -> None:
         items = sorted(svc.core.trust.items(), key=lambda x: x[1]) if svc else []
@@ -501,7 +530,7 @@ class ServerApp:
             svc.core.kick()
         else:
             svc.core.trust.revoke(device_id)
-        self._trust_snapshot = []
+        self._trust_snapshot = None
 
     def _on_close(self) -> None:
         self._stop()
