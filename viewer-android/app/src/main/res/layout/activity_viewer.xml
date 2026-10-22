@@ -40,6 +40,41 @@
             android:text="✕" />
     </LinearLayout>
 
+    <!-- Touchpad tugmalari (faqat touchpad rejimida ko'rinadi): Chap · GYRO · O'ng -->
+    <LinearLayout
+        android:id="@+id/touchpadBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="horizontal"
+        android:background="#88000000"
+        android:padding="6dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnLeft"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="Chap" />
+
+        <Button
+            android:id="@+id/btnGyro"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="GYRO" />
+
+        <Button
+            android:id="@+id/btnRight"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:text="O'ng" />
+    </LinearLayout>
+
     <!-- Klaviatura kiritishini ushlash uchun ko'rinmas maydon -->
     <EditText
         android:id="@+id/hiddenInput"
