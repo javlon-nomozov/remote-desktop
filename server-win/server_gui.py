@@ -1,8 +1,11 @@
 """Remote Server — zamonaviy GUI (CustomTkinter).
 
-Terminalsiz (exe --windowed): faqat bitta oyna. Yopilsa — toza to'xtaydi. Backend manzili
-ilovaga singdirilgan (app_config.BACKEND_URL) — foydalanuvchi hech narsa kiritmaydi, faqat
-"Boshlash" bosadi va unique KOD ko'rinadi.
+Terminalsiz (exe --windowed): faqat bitta oyna. Ochilishi bilan xizmat o'zi boshlanadi:
+  - internet orqali DOIMIY kod (backend manzili app_config.BACKEND_URL ga singdirilgan);
+  - lokal tarmoq (bitta Wi-Fi / USB modem): telefonlar ro'yxati, kompyuterdan tanlab ulash.
+Notanish telefon ulanmoqchi bo'lsa ruxsat va muddat so'raladi (30 daq / 1 soat / 1 kun / cheksiz);
+muddat ichida shu telefon so'rovsiz ulanadi. `--autostart` (Windows bilan birga) — oyna yig'ilgan
+holda ochiladi. Yopilsa — toza to'xtaydi.
 """
 from __future__ import annotations
 
@@ -10,18 +13,30 @@ import os
 import queue
 import sys
 import threading
+import time
 
 import customtkinter as ctk
 
 import app_config
+import autostart
 from input import InputController, winapi
-from net import RelayHost
+from net import REJECT, HostService, Viewer
+from net.discovery import lan_ips
+from net.host_core import _load_json, _save_json
 from overlay import Indicator
 
 ACCENT = "#1a1acf"
 ACCENT_HOVER = "#1414a0"
 GREEN = "#22c55e"
 GREEN_DIM = "#15803d"
+RED = "#b02020"
+RED_HOVER = "#8a1818"
+MUTED = "#888"
+
+# Ruxsat (ishonch) muddatlari: nom -> soniya (None = cheksiz)
+DURATIONS: dict[str, int | None] = {"30 daqiqa": 1800, "1 soat": 3600, "1 kun": 86400, "Cheksiz": None}
+DEFAULT_DURATION = "1 soat"
+ASK_TIMEOUT = 60  # ruxsat oynasi shuncha soniyada javobsiz bo'lsa — rad
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -32,88 +47,247 @@ def resource_path(name: str) -> str:
     return os.path.join(base, name)
 
 
+def fmt_left(until: float | None) -> str:
+    if until is None:
+        return "cheksiz"
+    left = int(until - time.time())
+    if left <= 0:
+        return "tugadi"
+    if left < 3600:
+        return f"{max(1, left // 60)} daq qoldi"
+    if left < 86400:
+        return f"{left // 3600} soat {left % 3600 // 60} daq qoldi"
+    return time.strftime("%d.%m %H:%M", time.localtime(until)) + " gacha"
+
+
+class PermissionDialog(ctk.CTkToplevel):
+    """Notanish telefon ulanmoqchi: ruxsat + muddat."""
+
+    def __init__(self, master, v: Viewer, on_done) -> None:
+        super().__init__(master)
+        self._on_done = on_done
+        self._done = False
+        self._left = ASK_TIMEOUT
+        self.title("Ulanish so'rovi")
+        self.geometry("440x290")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", lambda: self.finish(REJECT))
+
+        ctk.CTkLabel(self, text="Ulanish so'rovi", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(18, 6))
+        via = "internet" if v.via == "internet" else "lokal tarmoq"
+        ctk.CTkLabel(self, text=f"«{v.label}» {via} orqali\nkompyuteringizga ulanmoqchi.",
+                     wraplength=400, justify="center").pack(pady=(0, 12))
+        ctk.CTkLabel(self, text="Ruxsat muddati:", text_color=MUTED).pack()
+        self.dur = ctk.CTkSegmentedButton(self, values=list(DURATIONS))
+        self.dur.set(DEFAULT_DURATION)
+        self.dur.pack(pady=(4, 14))
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack()
+        ctk.CTkButton(row, text="Ruxsat berish", fg_color=GREEN_DIM, hover_color="#166534", width=150,
+                      command=lambda: self.finish(DURATIONS[self.dur.get()])).pack(side="left", padx=6)
+        ctk.CTkButton(row, text="Rad etish", fg_color=RED, hover_color=RED_HOVER, width=150,
+                      command=lambda: self.finish(REJECT)).pack(side="left", padx=6)
+        self.timer = ctk.CTkLabel(self, text="", text_color=MUTED)
+        self.timer.pack(pady=(10, 0))
+        self.after(150, self._focus)
+        self._tick()
+
+    def _focus(self) -> None:
+        try:
+            self.lift()
+            self.focus_force()
+            self.bell()
+        except Exception:
+            pass
+
+    def _tick(self) -> None:
+        if self._done:
+            return
+        if self._left <= 0:
+            self.finish(REJECT)
+            return
+        self.timer.configure(text=f"{self._left} s ichida javob bo'lmasa rad etiladi")
+        self._left -= 1
+        self.after(1000, self._tick)
+
+    def finish(self, result) -> None:
+        if self._done:
+            return
+        self._done = True
+        try:
+            self._on_done(result)
+        finally:
+            self.destroy()
+
+
 class ServerApp:
-    def __init__(self) -> None:
+    def __init__(self, autostarted: bool = False) -> None:
         winapi.set_dpi_aware()
+        self.cfg = {"fps": 20, "quality": 60, "indicator": "dot", "autostart": True}
+        self.cfg.update(_load_json("settings.json", {}))
+
         self.root = ctk.CTk()
         self.root.title(app_config.APP_NAME)
-        self.root.geometry("460x520")
-        self.root.resizable(False, False)
+        self.root.geometry("480x740")
+        self.root.minsize(440, 520)
+        try:
+            self.root.iconbitmap(resource_path("logo.ico"))
+        except Exception:
+            pass
 
         self.q: queue.Queue = queue.Queue()
         self.controller: InputController | None = None
         self.indicator: Indicator | None = None
-        self.server_obj: RelayHost | None = None
-        self.worker: threading.Thread | None = None
+        self.service: HostService | None = None
         self.running = False
-        self._pulse_on = False
+        self._dialogs: dict[int, PermissionDialog] = {}
+        self._phone_ids: tuple = ()
+        self._phone_dur: dict[str, ctk.StringVar] = {}
+        self._trust_snapshot: list = []
 
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(150, self._poll)
+        self.root.after(1000, self._refresh)
+
+        if self.cfg["autostart"] and autostart.exe_path():
+            threading.Thread(target=autostart.enable, daemon=True).start()  # yo'lni yangilab turamiz
+        self._start()
+        if autostarted:
+            self.root.after(300, self.root.iconify)
+
+    # --- UI ---------------------------------------------------------------
+    def _card(self, parent, title: str) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(parent, corner_radius=14)
+        card.pack(fill="x", padx=14, pady=7)
+        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=15, weight="bold"),
+                     anchor="w").pack(fill="x", padx=14, pady=(10, 2))
+        return card
 
     def _build(self) -> None:
         header = ctk.CTkFrame(self.root, fg_color="transparent")
-        header.pack(pady=(20, 6))
+        header.pack(pady=(14, 4))
         try:
             from PIL import Image
-            img = ctk.CTkImage(Image.open(resource_path("logo.jpg")), size=(52, 52))
+            img = ctk.CTkImage(Image.open(resource_path("logo.jpg")), size=(44, 44))
             ctk.CTkLabel(header, image=img, text="").pack(side="left", padx=(0, 10))
         except Exception:
             pass
         ctk.CTkLabel(header, text=app_config.APP_NAME,
-                     font=ctk.CTkFont(size=24, weight="bold")).pack(side="left")
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
 
-        card = ctk.CTkFrame(self.root, corner_radius=16)
-        card.pack(fill="x", padx=20, pady=12)
+        body = ctk.CTkScrollableFrame(self.root, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=4)
 
-        fr1 = ctk.CTkFrame(card, fg_color="transparent")
-        fr1.pack(fill="x", padx=16, pady=(16, 0))
-        self.fps_lbl = ctk.CTkLabel(fr1, text="FPS: 20", width=80, anchor="w")
-        self.fps_lbl.pack(side="left")
-        self.fps = ctk.CTkSlider(fr1, from_=5, to=60, number_of_steps=55,
-                                 command=lambda v: self.fps_lbl.configure(text=f"FPS: {int(v)}"))
-        self.fps.set(20)
-        self.fps.pack(side="right", fill="x", expand=True, padx=(8, 0))
-
-        fr2 = ctk.CTkFrame(card, fg_color="transparent")
-        fr2.pack(fill="x", padx=16, pady=(8, 0))
-        self.q_lbl = ctk.CTkLabel(fr2, text="Sifat: 60", width=80, anchor="w")
-        self.q_lbl.pack(side="left")
-        self.quality = ctk.CTkSlider(fr2, from_=20, to=90, number_of_steps=70,
-                                     command=lambda v: self.q_lbl.configure(text=f"Sifat: {int(v)}"))
-        self.quality.set(60)
-        self.quality.pack(side="right", fill="x", expand=True, padx=(8, 0))
-
-        fr3 = ctk.CTkFrame(card, fg_color="transparent")
-        fr3.pack(fill="x", padx=16, pady=(8, 16))
-        ctk.CTkLabel(fr3, text="Indikator", width=80, anchor="w").pack(side="left")
-        self.ind = ctk.CTkOptionMenu(fr3, values=["dot", "watermark", "off"])
-        self.ind.set("dot")
-        self.ind.pack(side="right")
-
-        self.btn = ctk.CTkButton(self.root, text="Boshlash", height=48,
-                                 font=ctk.CTkFont(size=16, weight="bold"),
-                                 fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                                 cursor="hand2", command=self._toggle)
-        self.btn.pack(fill="x", padx=20, pady=(6, 12))
-
-        statusf = ctk.CTkFrame(self.root, fg_color="transparent")
-        statusf.pack()
-        self.dot = ctk.CTkLabel(statusf, text="●", text_color="#555", font=ctk.CTkFont(size=16))
+        # Holat
+        st = self._card(body, "Holat")
+        ctk.CTkLabel(st, text="Internet orqali ulanish kodi:", text_color=MUTED,
+                     anchor="w").pack(fill="x", padx=14)
+        self.code_lbl = ctk.CTkLabel(st, text="— — —", text_color=ACCENT,
+                                     font=ctk.CTkFont(family="Consolas", size=30, weight="bold"))
+        self.code_lbl.pack(pady=(0, 2))
+        self.relay_lbl = ctk.CTkLabel(st, text="", text_color=MUTED)
+        self.relay_lbl.pack()
+        self.lan_lbl = ctk.CTkLabel(st, text="", text_color=MUTED, wraplength=420)
+        self.lan_lbl.pack(pady=(2, 6))
+        sess = ctk.CTkFrame(st, fg_color="transparent")
+        sess.pack(fill="x", padx=14, pady=(0, 12))
+        self.dot = ctk.CTkLabel(sess, text="●", text_color="#555", font=ctk.CTkFont(size=16))
         self.dot.pack(side="left", padx=(0, 6))
-        self.status = ctk.CTkLabel(statusf, text="To'xtagan", text_color="#999")
-        self.status.pack(side="left")
+        self.sess_lbl = ctk.CTkLabel(sess, text="Hech kim ulanmagan", anchor="w")
+        self.sess_lbl.pack(side="left", fill="x", expand=True)
+        self.kick_btn = ctk.CTkButton(sess, text="Uzish", width=80, fg_color=RED, hover_color=RED_HOVER,
+                                      command=self._kick)
 
-        ctk.CTkLabel(self.root, text="Ulanish kodi:", text_color="#888").pack(pady=(12, 0))
-        self.code_lbl = ctk.CTkLabel(self.root, text="— — —",
-                                     font=ctk.CTkFont(family="Consolas", size=30, weight="bold"),
-                                     text_color=ACCENT)
-        self.code_lbl.pack()
-        self.hint = ctk.CTkLabel(self.root, text="Telefonda shu kodni kiriting",
-                                 text_color="#888", wraplength=400)
-        self.hint.pack()
+        # Tarmoqdagi telefonlar
+        ph = self._card(body, "Tarmoqdagi telefonlar")
+        ctk.CTkLabel(ph, text="Bitta Wi-Fi yoki USB modemda ilovasi ochiq telefonlar. "
+                              "Tanlang va «Ulash» bosing.",
+                     text_color=MUTED, wraplength=420, justify="left", anchor="w").pack(fill="x", padx=14)
+        self.phones_box = ctk.CTkFrame(ph, fg_color="transparent")
+        self.phones_box.pack(fill="x", padx=10, pady=(4, 10))
 
+        # Ishonchli telefonlar
+        tr = self._card(body, "Ishonchli telefonlar")
+        ctk.CTkLabel(tr, text="Muddat ichida bu telefonlar so'rovsiz ulanadi.",
+                     text_color=MUTED, anchor="w").pack(fill="x", padx=14)
+        self.trust_box = ctk.CTkFrame(tr, fg_color="transparent")
+        self.trust_box.pack(fill="x", padx=10, pady=(4, 10))
+
+        # Sozlamalar
+        se = self._card(body, "Sozlamalar")
+        fr1 = ctk.CTkFrame(se, fg_color="transparent")
+        fr1.pack(fill="x", padx=14, pady=(4, 0))
+        self.fps_lbl = ctk.CTkLabel(fr1, text=f"FPS: {self.cfg['fps']}", width=80, anchor="w")
+        self.fps_lbl.pack(side="left")
+        self.fps = ctk.CTkSlider(fr1, from_=5, to=60, number_of_steps=55, command=self._on_fps)
+        self.fps.set(self.cfg["fps"])
+        self.fps.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        fr2 = ctk.CTkFrame(se, fg_color="transparent")
+        fr2.pack(fill="x", padx=14, pady=(8, 0))
+        self.q_lbl = ctk.CTkLabel(fr2, text=f"Sifat: {self.cfg['quality']}", width=80, anchor="w")
+        self.q_lbl.pack(side="left")
+        self.quality = ctk.CTkSlider(fr2, from_=20, to=90, number_of_steps=70, command=self._on_quality)
+        self.quality.set(self.cfg["quality"])
+        self.quality.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        fr3 = ctk.CTkFrame(se, fg_color="transparent")
+        fr3.pack(fill="x", padx=14, pady=(8, 0))
+        ctk.CTkLabel(fr3, text="Indikator", width=80, anchor="w").pack(side="left")
+        self.ind = ctk.CTkOptionMenu(fr3, values=["dot", "watermark", "off"], command=self._on_indicator)
+        self.ind.set(self.cfg["indicator"])
+        self.ind.pack(side="right")
+        self.auto_sw = ctk.CTkSwitch(se, text="Windows bilan birga ishga tushsin", command=self._on_autostart)
+        if self.cfg["autostart"]:
+            self.auto_sw.select()
+        if not autostart.exe_path():
+            self.auto_sw.configure(state="disabled", text="Windows bilan birga ishga tushsin (faqat exe)")
+        self.auto_sw.pack(anchor="w", padx=14, pady=(10, 12))
+
+        self.btn = ctk.CTkButton(self.root, text="To'xtatish", height=44,
+                                 font=ctk.CTkFont(size=15, weight="bold"),
+                                 fg_color=RED, hover_color=RED_HOVER, command=self._toggle)
+        self.btn.pack(fill="x", padx=18, pady=(6, 12))
+
+    # --- sozlamalar (ishlab turganda ham) ----------------------------------
+    def _save_cfg(self) -> None:
+        try:
+            _save_json("settings.json", self.cfg)
+        except Exception as e:
+            print(f"[gui] sozlama saqlanmadi: {e}")
+
+    def _on_fps(self, v) -> None:
+        self.cfg["fps"] = int(v)
+        self.fps_lbl.configure(text=f"FPS: {int(v)}")
+        if self.service:
+            self.service.core.fps = int(v)
+        self._save_cfg()
+
+    def _on_quality(self, v) -> None:
+        self.cfg["quality"] = int(v)
+        self.q_lbl.configure(text=f"Sifat: {int(v)}")
+        if self.service:
+            self.service.core.quality = int(v)
+        self._save_cfg()
+
+    def _on_indicator(self, mode: str) -> None:
+        self.cfg["indicator"] = mode
+        self._save_cfg()
+        cur = self.service.core.active if self.service else None
+        self._hide_indicator()
+        if cur is not None and cur.approved:
+            self._show_indicator()
+
+    def _on_autostart(self) -> None:
+        on = bool(self.auto_sw.get())
+        self.cfg["autostart"] = on
+        self._save_cfg()
+        if on:
+            threading.Thread(target=autostart.enable, daemon=True).start()
+        else:
+            autostart.disable()
+
+    # --- xizmat -----------------------------------------------------------
     def _toggle(self) -> None:
         if self.running:
             self._stop()
@@ -121,105 +295,213 @@ class ServerApp:
             self._start()
 
     def _start(self) -> None:
-        fps = int(self.fps.get())
-        quality = int(self.quality.get())
-
         self.controller = InputController()
-        if self.ind.get() != "off":
-            self.indicator = Indicator(mode=self.ind.get())
-            self.indicator.attach(self.root)
-
-        def on_code(d: dict) -> None:
-            self.q.put(("code", d.get("pretty", d.get("code", ""))))
-
-        def on_status(s: str) -> None:
-            self.q.put(("status", s))
-
-        self.server_obj = RelayHost(app_config.BACKEND_URL, fps=fps, quality=quality,
-                                    on_input=self.controller.handle,
-                                    on_code=on_code, on_status=on_status)
-        self.worker = threading.Thread(target=self._run_worker, daemon=True)
-        self.worker.start()
+        self.service = HostService(
+            app_config.BACKEND_URL,
+            fps=self.cfg["fps"], quality=self.cfg["quality"],
+            on_input=self.controller.handle,
+            ask_permission=self._ask_permission,
+            on_event=lambda kind, v: self.q.put(("event", kind, v)),
+            on_code=lambda d: self.q.put(("code", d.get("pretty", d.get("code", "")))),
+            on_relay_status=lambda s: self.q.put(("relay", s)),
+        )
+        self.service.start()
         self.running = True
-        self.btn.configure(text="To'xtatish", fg_color="#b02020", hover_color="#8a1818")
-        self.status.configure(text="Ulanmoqda...", text_color=GREEN)
-        self.code_lbl.configure(text="...")
-        self._lock(True)
-        self._pulse_on = True
-        self._pulse()
-
-    def _run_worker(self) -> None:
-        try:
-            self.server_obj.run()
-        except Exception as e:  # noqa: BLE001
-            self.q.put(("error", str(e)))
-        self.q.put(("stopped", None))
+        self.btn.configure(text="To'xtatish", fg_color=RED, hover_color=RED_HOVER)
+        self.relay_lbl.configure(text="Internetga ulanmoqda...", text_color=MUTED)
+        self.root.after(800, self._update_lan_label)
 
     def _stop(self) -> None:
-        try:
-            if self.server_obj is not None:
-                self.server_obj.stop()
-        except Exception:
-            pass
-        self._cleanup()
-
-    def _cleanup(self) -> None:
-        self.running = False
-        self._pulse_on = False
-        if self.indicator is not None:
-            self.indicator.detach()
-            self.indicator = None
+        if self.service is not None:
+            try:
+                self.service.stop()
+            except Exception:
+                pass
+            self.service = None
+        for d in list(self._dialogs.values()):
+            d.finish(REJECT)
+        self._hide_indicator()
         if self.controller is not None:
             try:
                 self.controller.reset()
             except Exception:
                 pass
             self.controller = None
-        self.server_obj = None
+        self.running = False
         self.btn.configure(text="Boshlash", fg_color=ACCENT, hover_color=ACCENT_HOVER)
-        self.status.configure(text="To'xtagan", text_color="#999")
-        self.dot.configure(text_color="#555")
         self.code_lbl.configure(text="— — —")
-        self._lock(False)
+        self.relay_lbl.configure(text="To'xtatilgan", text_color=MUTED)
+        self.lan_lbl.configure(text="")
+        self._set_session(None)
 
-    def _lock(self, lock: bool) -> None:
-        st = "disabled" if lock else "normal"
-        self.fps.configure(state=st)
-        self.quality.configure(state=st)
-        self.ind.configure(state=st)
-
-    def _pulse(self) -> None:
-        if not self._pulse_on:
+    def _update_lan_label(self) -> None:
+        if not self.running or self.service is None:
             return
-        self.dot.configure(text_color=GREEN if self.dot.cget("text_color") != GREEN else GREEN_DIM)
-        self.root.after(550, self._pulse)
+        if self.service.lan_error:
+            self.lan_lbl.configure(text=f"Lokal tarmoq ishlamayapti: {self.service.lan_error}",
+                                   text_color="#e05555")
+        else:
+            ips = ", ".join(lan_ips()) or "tarmoq yo'q"
+            self.lan_lbl.configure(text=f"Lokal: {self.service.discovery.name} · {ips}", text_color=MUTED)
+
+    def _kick(self) -> None:
+        if self.service is not None:
+            self.service.core.kick()
+
+    # --- ruxsat (xizmat thread'idan chaqiriladi) ----------------------------
+    def _ask_permission(self, v: Viewer):
+        box = {"res": REJECT, "ev": threading.Event()}
+        self.q.put(("ask", v, box))
+        box["ev"].wait(ASK_TIMEOUT + 5)
+        return box["res"]
+
+    def _open_dialog(self, v: Viewer, box: dict) -> None:
+        def done(res) -> None:
+            self._dialogs.pop(id(v), None)
+            box["res"] = res
+            box["ev"].set()
+
+        if self.root.state() == "iconic":
+            self.root.deiconify()
+        self._dialogs[id(v)] = PermissionDialog(self.root, v, done)
+
+    # --- indikator ---------------------------------------------------------
+    def _show_indicator(self) -> None:
+        if self.indicator is None and self.cfg["indicator"] != "off":
+            self.indicator = Indicator(mode=self.cfg["indicator"])
+            self.indicator.attach(self.root)
+
+    def _hide_indicator(self) -> None:
+        if self.indicator is not None:
+            self.indicator.detach()
+            self.indicator = None
+
+    # --- holat yangilash ----------------------------------------------------
+    def _set_session(self, v: Viewer | None) -> None:
+        if v is None:
+            self.dot.configure(text_color="#555")
+            self.sess_lbl.configure(text="Hech kim ulanmagan")
+            self.kick_btn.pack_forget()
+        else:
+            self.dot.configure(text_color=GREEN)
+            self.sess_lbl.configure(text=f"Ulangan: {v.label} — {fmt_left(v.until)}")
+            if not self.kick_btn.winfo_ismapped():
+                self.kick_btn.pack(side="right")
 
     def _poll(self) -> None:
         try:
             while True:
-                kind, val = self.q.get_nowait()
+                item = self.q.get_nowait()
+                kind = item[0]
                 if kind == "code":
-                    self.code_lbl.configure(text=val)
-                    self.status.configure(text="Tayyor — kodni kiriting", text_color=GREEN)
-                elif kind == "status":
-                    if val == "viewer_connected":
-                        self.status.configure(text="Viewer ulandi ✓", text_color=GREEN)
-                    elif val == "viewer_disconnected":
-                        self.status.configure(text="Tayyor (kutilmoqda)", text_color=GREEN)
-                        if self.controller is not None:  # bosilib qolgan tugma/barmoqlarni bo'shatish
-                            try:
-                                self.controller.reset()
-                            except Exception:
-                                pass
-                elif kind == "error":
-                    self.status.configure(text="Xato: " + val, text_color="#e05555")
-                    self.code_lbl.configure(text="— — —")
-                elif kind == "stopped":
-                    if self.running:
-                        self._cleanup()
+                    self.code_lbl.configure(text=item[1])
+                elif kind == "relay":
+                    if item[1] == "online":
+                        self.relay_lbl.configure(text="Internet: ulangan", text_color=GREEN)
+                    else:
+                        self.relay_lbl.configure(text="Internet yo'q — qayta urinilmoqda (lokal tarmoq ishlaydi)",
+                                                 text_color="#e0a030")
+                elif kind == "ask":
+                    _, v, box = item
+                    if v.alive:
+                        self._open_dialog(v, box)
+                    else:
+                        box["ev"].set()
+                elif kind == "event":
+                    _, ev, v = item
+                    if ev == "connected":
+                        self._set_session(v)
+                        self._show_indicator()
+                    elif ev == "disconnected":
+                        d = self._dialogs.get(id(v))
+                        if d is not None:
+                            d.finish(REJECT)  # so'rov kutayotgan telefon ketib qoldi
+                        cur = self.service.core.active if self.service else None
+                        if cur is None or not cur.approved:
+                            self._set_session(None)
+                            self._hide_indicator()
+                            if self.controller is not None:
+                                try:
+                                    self.controller.reset()  # bosilib qolgan tugma/barmoqlar
+                                except Exception:
+                                    pass
         except queue.Empty:
             pass
         self.root.after(150, self._poll)
+
+    def _refresh(self) -> None:
+        """Har soniyada: qolgan vaqt, telefonlar ro'yxati, ishonchli telefonlar."""
+        try:
+            svc = self.service
+            cur = svc.core.active if svc else None
+            if cur is not None and cur.approved and cur.alive:
+                self._set_session(cur)
+            self._refresh_phones(svc)
+            self._refresh_trusted(svc)
+        except Exception as e:
+            print(f"[gui] refresh xato: {e}")
+        self.root.after(1000, self._refresh)
+
+    def _refresh_phones(self, svc: HostService | None) -> None:
+        phones = svc.discovery.phones() if svc else []
+        ids = tuple(sorted(p["device_id"] for p in phones))
+        if ids == self._phone_ids:
+            return
+        self._phone_ids = ids
+        for w in self.phones_box.winfo_children():
+            w.destroy()
+        if not phones:
+            ctk.CTkLabel(self.phones_box, text="Hozircha telefon topilmadi.",
+                         text_color="#666").pack(anchor="w", padx=4)
+            return
+        for p in phones:
+            dev = p["device_id"]
+            row = ctk.CTkFrame(self.phones_box)
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text=f"{p['name']}\n{p['ip']}", justify="left",
+                         anchor="w").pack(side="left", padx=8, pady=4)
+            var = self._phone_dur.setdefault(dev, ctk.StringVar(value=DEFAULT_DURATION))
+            ctk.CTkButton(row, text="Ulash", width=70,
+                          command=lambda d=dev, n=p["name"], vr=var: self._connect_phone(d, n, vr.get())
+                          ).pack(side="right", padx=6)
+            ctk.CTkOptionMenu(row, values=list(DURATIONS), variable=var, width=110).pack(side="right")
+
+    def _connect_phone(self, device_id: str, name: str, dur: str) -> None:
+        if self.service is None:
+            return
+        ok = self.service.connect_phone(device_id, name, DURATIONS[dur])
+        if not ok:
+            self.sess_lbl.configure(text="Telefonga taklif yuborilmadi (tarmoqni tekshiring)")
+        self._trust_snapshot = []  # ro'yxatni yangilash
+
+    def _refresh_trusted(self, svc: HostService | None) -> None:
+        items = sorted(svc.core.trust.items(), key=lambda x: x[1]) if svc else []
+        snap = [(k, n, fmt_left(u)) for k, n, u in items]
+        if snap == self._trust_snapshot:
+            return
+        self._trust_snapshot = snap
+        for w in self.trust_box.winfo_children():
+            w.destroy()
+        if not snap:
+            ctk.CTkLabel(self.trust_box, text="Yo'q.", text_color="#666").pack(anchor="w", padx=4)
+            return
+        for dev, name, left in snap:
+            row = ctk.CTkFrame(self.trust_box)
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text=f"{name}\n{left}", justify="left", anchor="w").pack(side="left", padx=8, pady=4)
+            ctk.CTkButton(row, text="O'chirish", width=80, fg_color="#444", hover_color="#333",
+                          command=lambda d=dev: self._revoke(d)).pack(side="right", padx=6)
+
+    def _revoke(self, device_id: str) -> None:
+        svc = self.service
+        if svc is None:
+            return
+        cur = svc.core.active
+        if cur is not None and cur.device_id == device_id:
+            svc.core.kick()
+        else:
+            svc.core.trust.revoke(device_id)
+        self._trust_snapshot = []
 
     def _on_close(self) -> None:
         self._stop()
@@ -248,7 +530,10 @@ def _redirect_output_to_log() -> None:
 
 def main() -> None:
     _redirect_output_to_log()
-    ServerApp().run()
+    if not autostart.acquire_single_instance():
+        autostart.focus_existing(app_config.APP_NAME)  # dastur allaqachon ochiq
+        return
+    ServerApp(autostarted="--autostart" in sys.argv).run()
 
 
 if __name__ == "__main__":

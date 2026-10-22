@@ -1,45 +1,42 @@
-"""Relay host klienti — server backendga ulanib UNIQUE KOD oladi va shu orqali stream qiladi.
+"""Relay host klienti — server backendga ulanib KOD oladi va shu orqali stream qiladi.
 
-Server (boshqariladigan kompyuter) backendga `/relay/host` ga ulanadi, kod oladi va uni
-ko'rsatadi. Viewer o'sha kodni kiritganda backend juftlaydi; shundan so'ng kadrlar va input
-relay orqali o'tadi. Telefon va kompyuter har xil tarmoqda bo'lsa ham ishlaydi.
+Server (boshqariladigan kompyuter) backendga `/relay/host?id=&secret=` ga ulanadi va o'zining
+DOIMIY kodini oladi (kompyuter qayta yoqilganda ham o'sha kod — telefon o'zi qayta ulanadi).
+Viewer o'sha kodni kiritganda backend juftlaydi; shundan so'ng kadrlar va input relay orqali
+o'tadi. Telefon va kompyuter har xil tarmoqda bo'lsa ham ishlaydi.
+
+Internet bo'lmasa yoki aloqa uzilsa — fonda qayta urinadi (LAN rejimi bunga bog'liq emas).
+Ruxsat va kadr oqimi `HostCore` da.
 """
 from __future__ import annotations
 
 import json
 import threading
-import time
-from io import BytesIO
 from typing import Callable, Optional
+from urllib.parse import urlencode
 
-from PIL import Image
 from websockets.sync.client import connect
 
-from capture import ScreenCapture
+from .host_core import HostCore, Viewer, host_identity
 
 
 class RelayHost:
     def __init__(
         self,
         relay_url: str,
-        fps: int = 20,
-        quality: int = 60,
-        scale: float = 1.0,
-        on_input: Optional[Callable[[dict], None]] = None,
+        core: HostCore,
         on_code: Optional[Callable[[dict], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
-        self.url = relay_url.rstrip("/") + "/relay/host"
-        self.fps = fps
-        self.quality = quality
-        self.scale = scale
-        self.on_input = on_input
+        hid, secret = host_identity()
+        self.url = relay_url.rstrip("/") + "/relay/host?" + urlencode({"id": hid, "secret": secret})
+        self.core = core
         self.on_code = on_code
-        self.on_status = on_status
+        self.on_status = on_status  # "online" | "offline"
         self.code: Optional[str] = None
-        self._present = threading.Event()  # viewer ulanganmi
-        self._cap: Optional[ScreenCapture] = None
         self._ws = None
+        self._viewer: Optional[Viewer] = None
+        self._send_lock = threading.Lock()
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -50,86 +47,73 @@ class RelayHost:
         except Exception:
             pass
 
-    def _encode(self, frame) -> bytes:
-        rgb = frame[:, :, ::-1]
-        img = Image.fromarray(rgb)
-        if self.scale != 1.0:
-            img = img.resize((int(img.width * self.scale), int(img.height * self.scale)))
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=self.quality)
-        return buf.getvalue()
+    def _status(self, s: str) -> None:
+        if self.on_status:
+            self.on_status(s)
 
-    def _send_hello(self, ws) -> None:
-        for _ in range(40):
-            f = self._cap.grab() if self._cap else None
-            if f is not None:
-                h, w = f.shape[0], f.shape[1]
-                ws.send(json.dumps({"t": "hello", "w": int(w), "h": int(h), "fps": self.fps}))
-                return
-            time.sleep(0.02)
+    def run_forever(self) -> None:
+        """Uzilsa qayta ulanadi (2 -> 10 s oraliq) — stop() chaqirilguncha."""
+        delay = 2.0
+        while not self._stop.is_set():
+            try:
+                self._run_once()
+                delay = 2.0
+            except Exception as e:
+                print(f"[relay] ulanib bo'lmadi: {e}")
+            self._end_viewer()
+            if self._stop.is_set():
+                break
+            self._status("offline")
+            self._stop.wait(delay)
+            delay = min(delay * 2, 10.0)
 
-    def _send_frames(self, ws, stop: threading.Event) -> None:
-        interval = 1.0 / max(1, self.fps)
-        while not stop.is_set():
-            if not self._present.is_set():
-                time.sleep(0.1)
-                continue
-            t0 = time.perf_counter()
-            frame = self._cap.grab() if self._cap else None
-            if frame is not None:
-                try:
-                    ws.send(self._encode(frame))
-                except Exception:
-                    break
-            dt = time.perf_counter() - t0
-            if dt < interval:
-                time.sleep(interval - dt)
+    def _send(self, data) -> None:
+        ws = self._ws
+        if ws is None:
+            raise ConnectionError("relay yopiq")
+        with self._send_lock:
+            ws.send(data)
 
-    def run(self) -> None:
-        self._cap = ScreenCapture(target_fps=self.fps)
-        try:
-            with connect(self.url, max_size=None, open_timeout=15) as ws:
-                self._ws = ws
+    def _end_viewer(self) -> None:
+        v, self._viewer = self._viewer, None
+        if v is not None:
+            self.core.viewer_disconnected(v)
+
+    def _run_once(self) -> None:
+        with connect(self.url, max_size=None, open_timeout=15) as ws:
+            self._ws = ws
+            try:
                 data = json.loads(ws.recv())
                 if data.get("t") == "code":
                     self.code = data["code"]
-                    pretty = data.get("pretty", self.code)
-                    print(f"\n======== ULANISH KODI: {pretty} ========")
-                    print("Telefonda shu kodni kiriting.\n")
+                    print(f"\n======== ULANISH KODI: {data.get('pretty', self.code)} ========\n")
+                    self._status("online")
                     if self.on_code:
                         self.on_code(data)
-
-                stop = threading.Event()
-                sender = threading.Thread(target=self._send_frames, args=(ws, stop), daemon=True)
-                sender.start()
-                try:
-                    for m in ws:
-                        if isinstance(m, (bytes, bytearray)):
-                            continue
-                        try:
-                            d = json.loads(m)
-                        except Exception:
-                            continue
-                        t = d.get("t")
-                        if t == "viewer_connected":
-                            print("[relay] viewer ulandi")
-                            self._present.set()
-                            self._send_hello(ws)
-                            if self.on_status:
-                                self.on_status("viewer_connected")
-                        elif t == "viewer_disconnected":
-                            print("[relay] viewer uzildi")
-                            self._present.clear()
-                            if self.on_status:
-                                self.on_status("viewer_disconnected")
-                        elif self.on_input is not None:
-                            # input xatosi (masalan InjectTouchInput rad etsa) sessiyani yiqitmasin
-                            try:
-                                self.on_input(d)
-                            except Exception as e:
-                                print(f"[relay] input xato: {e}")
-                finally:
-                    stop.set()
-        finally:
-            if self._cap:
-                self._cap.close()
+                for m in ws:
+                    if isinstance(m, (bytes, bytearray)):
+                        continue
+                    try:
+                        d = json.loads(m)
+                    except Exception:
+                        continue
+                    t = d.get("t")
+                    if t == "viewer_connected":
+                        self._end_viewer()
+                        v = Viewer(
+                            send_text=self._send,
+                            send_bytes=self._send,
+                            close=lambda: None,  # relay'da viewer socketi backendda; u o'zi yopadi
+                            device_id=str(d.get("device_id", "")),
+                            device_name=str(d.get("device_name", "")),
+                            user=str(d.get("user", "")),
+                            via="internet",
+                        )
+                        self._viewer = v
+                        self.core.viewer_connected(v)
+                    elif t == "viewer_disconnected":
+                        self._end_viewer()
+                    elif self._viewer is not None:
+                        self.core.viewer_message(self._viewer, d)
+            finally:
+                self._ws = None

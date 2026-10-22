@@ -17,13 +17,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import socket
 import threading
 import time
 import tkinter as tk
+import uuid
 from io import BytesIO
 
 from PIL import Image, ImageTk
 from websockets.sync.client import connect
+
+
+def _device_id() -> str:
+    """Shu viewer'ning doimiy identifikatori (server uni ishonchli ro'yxatda eslab qoladi)."""
+    path = os.path.join(os.path.expanduser("~"), ".remote_viewer_id")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        dev = uuid.uuid4().hex
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(dev)
+        return dev
 
 # Tk keysym -> W3C KeyboardEvent.code (maxsus tugmalar)
 _SPECIAL = {
@@ -85,16 +101,25 @@ class Viewer:
         try:
             with connect(self.uri, max_size=None, open_timeout=10) as ws:
                 self.ws = ws
-                hello = ws.recv()
-                if isinstance(hello, str):
-                    info = json.loads(hello)
-                    self.root.title(f"Remote Viewer — {info.get('w')}x{info.get('h')} "
-                                    f"@ {info.get('fps')}fps  [abs]  (F9: touchpad, Esc: release)")
+                # o'zimizni tanishtiramiz (server ruxsat so'raydi / ishonchli bo'lsa darhol ulaydi)
+                ws.send(json.dumps({"t": "viewer_hello", "device_id": _device_id(),
+                                    "device_name": f"Windows viewer ({socket.gethostname()})"}))
                 while self._running:
                     msg = ws.recv()
                     if isinstance(msg, (bytes, bytearray)):
                         with self._lock:
                             self._latest = bytes(msg)
+                        continue
+                    info = json.loads(msg)
+                    t = info.get("t")
+                    if t == "hello":
+                        self.root.title(f"Remote Viewer — {info.get('w')}x{info.get('h')} "
+                                        f"@ {info.get('fps')}fps  [abs]  (F9: touchpad, Esc: release)")
+                    elif t == "waiting_approval":
+                        self._set_status("Kompyuterda ruxsat kutilmoqda...")
+                    elif t in ("rejected", "expired", "kicked", "busy"):
+                        self._set_status(f"Ulanish tugadi: {t}")
+                        return
         except Exception as e:
             self._set_status(f"Ulanish xatosi: {e}")
 

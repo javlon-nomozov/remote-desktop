@@ -16,6 +16,8 @@ import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.text.Editable
 import android.text.TextWatcher
@@ -28,6 +30,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -51,6 +54,24 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     // Kompyuter tugmalari: yoniq (yopishqoq) modifikatorlar, code -> tugma.
     // Keyingi oddiy tugma/harfdan keyin avtomatik qo'yib yuboriladi (Ctrl+C, Win+R, Alt+F4...).
     private val heldMods = LinkedHashMap<String, MaterialButton>()
+
+    // Ulanish holati
+    private lateinit var statusView: TextView
+    private val handler = Handler(Looper.getMainLooper())
+    private var mode = "relay"  // "relay" (internet kodi) | "lan" (Wi-Fi / USB)
+    private var relayUrl = ""
+    private var code = ""
+    private var token = ""
+    private var lanHost = ""
+    private var lanPort = 0
+    private var approvedOnce = false   // shu ekranda kamida bir marta ruxsat olindi
+    private var trustUntilMs = 0L      // ishonch muddati (0 = cheksiz/noma'lum)
+    private var terminal = false       // rad / muddat / ✕ — qayta ulanmaymiz
+    private var visible = false
+    private var attempt = 0
+    private var reconnectPending = false
+    @Volatile private var lastRxMs = 0L
+    private var lanPresence: LanPresence? = null
 
     // Screenshot: oxirgi kelgan JPEG kadr (qayta siqilmasdan saqlanadi)
     @Volatile private var lastJpeg: ByteArray? = null
@@ -79,21 +100,13 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
-        val url: String
-        val handshake: String?
-        if ((intent.getStringExtra("mode") ?: "relay") == "relay") {
-            val relay = (intent.getStringExtra("relay") ?: "").trimEnd('/')
-            url = "$relay/relay/viewer"
-            handshake = JSONObject()
-                .put("code", (intent.getStringExtra("code") ?: "").replace(" ", ""))
-                .put("token", intent.getStringExtra("token") ?: "")
-                .toString()
-        } else {
-            val host = intent.getStringExtra("host") ?: "127.0.0.1"
-            val port = intent.getIntExtra("port", 8765)
-            url = "ws://$host:$port"
-            handshake = null
-        }
+        statusView = findViewById(R.id.statusText)
+        mode = intent.getStringExtra("mode") ?: "relay"
+        relayUrl = (intent.getStringExtra("relay") ?: "").trimEnd('/')
+        code = (intent.getStringExtra("code") ?: "").replace(" ", "")
+        token = intent.getStringExtra("token") ?: ""
+        lanHost = intent.getStringExtra("host") ?: ""
+        lanPort = intent.getIntExtra("port", 0)
 
         view.onInput = { json -> client.send(json) }
 
@@ -116,14 +129,161 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
             }
         }
         findViewById<Button>(R.id.btnScreenshot).setOnClickListener { saveScreenshot() }
-        findViewById<Button>(R.id.btnDisconnect).setOnClickListener { finish() }
+        findViewById<Button>(R.id.btnDisconnect).setOnClickListener {
+            terminal = true
+            Device.blockAutoConnect(this, 60_000)  // kompyuter darhol qayta ulab qo'ymasin
+            finish()
+        }
 
         setupTouchpadButtons()
         setupKeyboardCapture()
         setupPcKeys()
 
-        client = StreamClient(url, handshake, this)
-        client.connect()
+        client = StreamClient(this)
+        showStatus("Ulanmoqda…")
+        connectNow()
+        handler.postDelayed(watchdog, 2000)
+    }
+
+    // --- Ulanish: ruxsat, fon/old, avtomatik qayta ulanish -------------
+    private fun connectNow() {
+        if (terminal || isFinishing) return
+        val dev = Device.id(this)
+        val name = Device.name()
+        if (mode == "relay") {
+            client.connect(
+                "$relayUrl/relay/viewer",
+                JSONObject().put("code", code).put("token", token)
+                    .put("device_id", dev).put("device_name", name).toString(),
+            )
+        } else {
+            client.connect(
+                "ws://$lanHost:$lanPort",
+                JSONObject().put("t", "viewer_hello").put("device_id", dev).put("device_name", name).toString(),
+            )
+        }
+    }
+
+    private fun handleControl(o: JSONObject) {
+        lastRxMs = System.currentTimeMillis()
+        when (o.optString("t")) {
+            "waiting_approval" -> showStatus("Kompyuterda ruxsat kutilmoqda…")
+            "approved" -> {
+                approvedOnce = true
+                attempt = 0
+                trustUntilMs = if (o.isNull("until")) 0L else (o.optDouble("until") * 1000).toLong()
+                hideStatus()
+                stopLanSearch()
+                if (!visible) client.send(PAUSE)
+            }
+            "hello" -> title = "Remote ${o.optInt("w")}x${o.optInt("h")} @${o.optInt("fps")}fps"
+            "rejected" -> end("Kompyuter ulanishni rad etdi")
+            "expired" -> end("Ruxsat muddati tugadi")
+            "kicked" -> end("Kompyuter ulanishni uzdi")
+            "busy" -> end("Kompyuter band: boshqa telefon ulangan")
+            "error" -> when (o.optString("code")) {
+                // kompyuter qayta yoqilayotgan bo'lishi mumkin — ilgari ulangan bo'lsak kutamiz
+                "not_found" -> if (approvedOnce) scheduleReconnect()
+                               else end("Kompyuter topilmadi. Kodni tekshiring")
+                "busy" -> end("Kompyuter band: boshqa telefon ulangan")
+                "unauthorized" -> end("Kirish tasdiqlanmadi. Qayta kiring")
+                else -> end("Xato: ${o.optString("code")}")
+            }
+        }
+    }
+
+    private fun scheduleReconnect() {
+        if (terminal || isFinishing || reconnectPending) return
+        if (trustUntilMs > 0 && System.currentTimeMillis() > trustUntilMs) {
+            end("Ruxsat muddati tugadi")
+            return
+        }
+        if (!approvedOnce && attempt >= 5) {
+            end(if (mode == "relay") "Ulanib bo'lmadi. Internet va kodni tekshiring" else "Kompyuterga ulanib bo'lmadi")
+            return
+        }
+        clearModsUi()
+        showStatus(if (approvedOnce) "Aloqa uzildi — kompyuter kutilmoqda…" else "Ulanmoqda…")
+        if (mode == "lan" && approvedOnce) startLanSearch()  // kompyuter IP'si o'zgargan bo'lishi mumkin
+        if (!visible) return  // fonda urinmaymiz — ilovaga qaytganda davom etadi
+        reconnectPending = true
+        val delay = RETRY_DELAYS[minOf(attempt, RETRY_DELAYS.size - 1)]
+        attempt++
+        handler.postDelayed({
+            reconnectPending = false
+            if (!client.isActive) connectNow()
+        }, delay)
+    }
+
+    /** Socket "tirik" ko'rinsa ham kadr kelmay qolsa (fonda muzlatilgan jarayon) — qayta ulanamiz. */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (terminal) return
+            if (visible && approvedOnce && client.isOpen && statusView.visibility != View.VISIBLE &&
+                System.currentTimeMillis() - lastRxMs > 6000
+            ) {
+                client.disconnect()
+                attempt = 0
+                scheduleReconnect()
+            }
+            handler.postDelayed(this, 2000)
+        }
+    }
+
+    private fun startLanSearch() {
+        if (lanPresence != null) return
+        lanPresence = LanPresence(this, true) { host, port, _ ->
+            runOnUiThread {
+                if (terminal || client.isOpen) return@runOnUiThread
+                lanHost = host
+                lanPort = port
+                attempt = 0
+                connectNow()
+            }
+        }.also { it.start() }
+    }
+
+    private fun stopLanSearch() {
+        lanPresence?.stop()
+        lanPresence = null
+    }
+
+    private fun showStatus(text: String) {
+        statusView.text = text
+        statusView.visibility = View.VISIBLE
+    }
+
+    private fun hideStatus() {
+        statusView.visibility = View.GONE
+    }
+
+    private fun end(message: String) {
+        if (terminal && isFinishing) return
+        terminal = true
+        handler.removeCallbacksAndMessages(null)
+        stopLanSearch()
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        finish()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        visible = true
+        if (terminal) return
+        if (client.isOpen) {
+            lastRxMs = System.currentTimeMillis()  // watchdog kadrlar qayta kelishini kutsin
+            client.send(RESUME)
+        } else if (!client.isActive) {
+            attempt = 0
+            scheduleReconnect()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        visible = false
+        stopGyro()
+        if (client.isOpen) client.send(PAUSE)  // fonda kadr kerak emas (trafik/batareya)
     }
 
     // --- Touchpad tugmalari: Chap · GYRO · O'ng -----------------------
@@ -312,6 +472,12 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
         heldMods.clear()
     }
 
+    /** Aloqa uzilganda: kompyuter tugmalarni o'zi qo'yib yuboradi, biz faqat ko'rinishni tozalaymiz. */
+    private fun clearModsUi() {
+        for (b in heldMods.values) b.backgroundTintList = ColorStateList.valueOf(KEY_COLOR)
+        heldMods.clear()
+    }
+
     private fun keyEvent(code: String, down: Boolean) {
         client.send(JSONObject().put("t", "key").put("code", code).put("down", down).toString())
     }
@@ -384,29 +550,36 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener, SensorEventLi
     }
 
     // --- StreamClient.Listener ----------------------------------------
-    override fun onHello(w: Int, h: Int, fps: Int) {
-        runOnUiThread { title = "Remote ${w}x$h @${fps}fps" }
+    override fun onText(o: JSONObject) {
+        runOnUiThread { handleControl(o) }
     }
 
     override fun onFrame(data: ByteArray) {
+        lastRxMs = System.currentTimeMillis()
         lastJpeg = data
         val bmp = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return
         view.setFrame(bmp)
     }
 
     override fun onClosed(reason: String) {
-        runOnUiThread { finish() }
+        runOnUiThread { scheduleReconnect() }  // ✕ / rad / muddat tugashi bo'lmasa — qayta ulanamiz
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        terminal = true
+        handler.removeCallbacksAndMessages(null)
+        stopLanSearch()
         stopGyro()
         releaseMods()  // kompyuterda Ctrl/Alt/Win bosilib qolmasin
-        client.close()
+        client.shutdown()
     }
 
     companion object {
         private const val REQ_STORAGE = 41
+        private val PAUSE = JSONObject().put("t", "pause").toString()
+        private val RESUME = JSONObject().put("t", "resume").toString()
+        private val RETRY_DELAYS = longArrayOf(300, 1000, 2000, 3000, 5000)
         private val KEY_COLOR = Color.parseColor("#37474F")
         private val MOD_ON_COLOR = Color.parseColor("#F57C00")  // yoniq modifikator
 

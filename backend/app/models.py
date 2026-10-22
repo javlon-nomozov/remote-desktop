@@ -153,6 +153,18 @@ class LoginNonce(SQLModel, table=True):
     created_at: NaiveDatetime = Field(default_factory=_now)
 
 
+class HostId(SQLModel, table=True):
+    """Kompyuterning doimiy 9-xonali kodi. Birinchi ulangan kompyuter `secret` bilan egallaydi;
+    keyin shu kodni faqat o'sha secret bilan olish mumkin (boshqasi o'g'irlay olmaydi)."""
+
+    __tablename__ = "host_ids"
+
+    id: str = Field(primary_key=True)
+    secret_hash: str
+    created_at: NaiveDatetime = Field(default_factory=_now)
+    last_seen_at: NaiveDatetime = Field(default_factory=_now)
+
+
 class BalanceTx(SQLModel, table=True):
     """Balans daftari — referal bonuslar va boshqa o'zgarishlar shaffofligi uchun."""
 

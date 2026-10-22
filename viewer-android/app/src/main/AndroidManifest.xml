@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lokal tarmoqda kompyuterni topish: Wi-Fi'da broadcast paketlarni qabul qilish -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Screenshot'ni galereyaga saqlash: Android 10+ da ruxsat kerak emas (MediaStore) -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"

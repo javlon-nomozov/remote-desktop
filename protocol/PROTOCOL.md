@@ -79,3 +79,30 @@ uni Windows virtual-key / scancode ga map qiladi.
 
 > Eslatma: server ilova yopilsa — sessiya o'ladi (fon xizmati yo'q). Indikator doim
 > ko'rinadi; `off` faqat test/admin uchun.
+
+## 4. Ulanish, ruxsat va lokal tarmoq (amaldagi transport: WebSocket + JPEG)
+
+### 4.1 Yo'llar
+- **Internet (relay):** host `wss://<backend>/relay/host?id=<9 xona>&secret=<hex>` — doimiy kod
+  (birinchi marta egallanadi, keyin faqat shu secret bilan). Viewer `wss://<backend>/relay/viewer`
+  va birinchi xabar: `{"code","token","device_id","device_name"}`. Backend host'ga
+  `{"t":"viewer_connected","device_id","device_name","user"}` / `{"t":"viewer_disconnected"}` yuboradi.
+  Bir xil `device_id` bilan qayta ulanish eski viewer'ni almashtiradi (`busy` emas).
+- **LAN (Wi-Fi / USB modem):** viewer `ws://<kompyuter IP>:<port>` (standart 47865) va birinchi
+  xabar: `{"t":"viewer_hello","device_id","device_name"}`.
+
+### 4.2 Lokal topish (UDP, internet kerak emas)
+- Telefon → broadcast UDP **47866** (har 2 s): `{"t":"rv_phone","device_id","device_name","auto":true}`.
+  `auto=false` — foydalanuvchi o'zi uzgan, avtomatik taklif qilinmasin.
+- Kompyuter → telefon UDP **47867**: `{"t":"rv_invite","host":"<IP>","port":47865,"name":"<kompyuter>"}`.
+  Kompyuterdagi ro'yxatdan tanlanganda yoki telefon ishonchli bo'lsa (`auto=true`) yuboriladi.
+
+### 4.3 Ruxsat (host tomonida tekshiriladi)
+host → viewer: `waiting_approval` → `approved{"until": epoch|null}` → `hello{w,h,fps}` + JPEG kadrlar.
+Yakunlovchi: `rejected`, `expired` (ishonch muddati tugadi), `kicked` (kompyuterda "Uzish"), `busy`.
+Ruxsatdan oldin kadr yuborilmaydi va input qo'llanmaydi. Ishonchli telefonlar:
+`%LOCALAPPDATA%\RemoteServer\trusted.json` (`{device_id: {name, until}}`, `until=null` — cheksiz).
+
+### 4.4 Fon rejimi
+viewer → host: `{"t":"pause"}` (ilova fonga o'tdi — kadrlar to'xtaydi), `{"t":"resume"}`.
+Uzilishda viewer o'zi qayta ulanadi (ishonch muddati ichida so'rovsiz).
