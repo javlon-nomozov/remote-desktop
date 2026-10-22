@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlmodel import select
@@ -56,6 +56,21 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         welcome = cfg.welcome_text
     greet = welcome if created else "Qaytganingizdan xursandmiz!"
     await message.answer(greet, reply_markup=kb.main_menu(referral_enabled))
+
+
+@router.message(Command("kirish"))
+async def cmd_login(message: Message) -> None:
+    """Ilovaga kirish tokenini beradi (viewer app'ga joylaydi)."""
+    with get_session() as s:
+        user, _ = user_svc.get_or_create_user(
+            s, message.from_user.id, message.from_user.username, message.from_user.full_name
+        )
+        token = user_svc.ensure_login_token(s, user)
+    await message.answer(
+        "🔑 <b>Kirish kodingiz (token)</b>\n\n"
+        f"<code>{token}</code>\n\n"
+        "Ilovada (telefon/kompyuter) shu tokenni joylang. Hech kimga bermang.",
+    )
 
 
 @router.callback_query(F.data == "menu")

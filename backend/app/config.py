@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Railway service public URL, masalan https://xxx.up.railway.app  (oxirida / yo'q)
     public_base_url: str = "http://localhost:8000"
 
+    # Relay: viewer ulanishida faol obunani majburiy qilish (True bo'lsa token kerak)
+    relay_require_subscription: bool = False
+
     model_config = SettingsConfigDict(
         env_file=str(ROOT / ".env"),
         env_file_encoding="utf-8",

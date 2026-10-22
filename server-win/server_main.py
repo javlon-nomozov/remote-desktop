@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 
 from input import InputController
-from net import StreamServer
+from net import RelayHost, StreamServer
 from overlay import Indicator
 
 
@@ -30,6 +30,9 @@ def main() -> None:
     p.add_argument("--indicator", choices=["dot", "watermark", "off"], default="dot")
     p.add_argument("--no-input", action="store_true",
                    help="input injeksiyasini o'chirish (faqat ekran ko'rsatish; xavfsiz sinov)")
+    p.add_argument("--relay", default="",
+                   help="backend relay URL (masalan ws://localhost:8000 yoki wss://xxx.up.railway.app). "
+                        "Berilsa, unique kod orqali ulanadi (IP kerak emas).")
     args = p.parse_args()
 
     controller = None if args.no_input else InputController()
@@ -43,12 +46,15 @@ def main() -> None:
         indicator = Indicator(mode=args.indicator)
         indicator.start()
 
-    server = StreamServer(
-        host=args.host, port=args.port, fps=args.fps,
-        quality=args.quality, scale=args.scale, on_input=on_input,
-    )
     try:
-        server.serve()
+        if args.relay:
+            # Unique kod orqali (backend relay) — IP kerak emas
+            RelayHost(args.relay, fps=args.fps, quality=args.quality,
+                      scale=args.scale, on_input=on_input).run()
+        else:
+            # To'g'ridan-to'g'ri LAN (IP:port)
+            StreamServer(host=args.host, port=args.port, fps=args.fps,
+                         quality=args.quality, scale=args.scale, on_input=on_input).serve()
     except KeyboardInterrupt:
         print("\nto'xtatildi.")
     finally:

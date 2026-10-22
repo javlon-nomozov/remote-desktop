@@ -20,6 +20,7 @@ from .admin import setup_admin
 from .config import settings
 from .db import get_session, init_db
 from .models import Payment
+from .relay import router as relay_router
 
 app = FastAPI(title="Remote Desktop Backend")
 _basic = HTTPBasic()
@@ -30,8 +31,9 @@ def _startup() -> None:
     init_db()
 
 
-# SQLAdmin panel
+# SQLAdmin panel + relay (unique-kod ulanish)
 setup_admin(app)
+app.include_router(relay_router)
 
 
 def require_admin(creds: HTTPBasicCredentials = Depends(_basic)) -> bool:

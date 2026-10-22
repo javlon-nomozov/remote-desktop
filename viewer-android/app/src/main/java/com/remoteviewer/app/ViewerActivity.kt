@@ -24,8 +24,21 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener {
         view = findViewById(R.id.remoteView)
         hiddenInput = findViewById(R.id.hiddenInput)
 
-        val host = intent.getStringExtra("host") ?: "127.0.0.1"
-        val port = intent.getIntExtra("port", 8765)
+        val url: String
+        val handshake: String?
+        if ((intent.getStringExtra("mode") ?: "relay") == "relay") {
+            val relay = (intent.getStringExtra("relay") ?: "").trimEnd('/')
+            url = "$relay/relay/viewer"
+            handshake = JSONObject()
+                .put("code", (intent.getStringExtra("code") ?: "").replace(" ", ""))
+                .put("token", intent.getStringExtra("token") ?: "")
+                .toString()
+        } else {
+            val host = intent.getStringExtra("host") ?: "127.0.0.1"
+            val port = intent.getIntExtra("port", 8765)
+            url = "ws://$host:$port"
+            handshake = null
+        }
 
         view.onInput = { json -> client.send(json) }
 
@@ -42,7 +55,7 @@ class ViewerActivity : AppCompatActivity(), StreamClient.Listener {
 
         setupKeyboardCapture()
 
-        client = StreamClient(host, port, this)
+        client = StreamClient(url, handshake, this)
         client.connect()
     }
 

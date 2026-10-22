@@ -62,6 +62,7 @@ class User(SQLModel, table=True):
     full_name: str = Field(default="")
     referral_code: str = Field(default="", index=True)
     referred_by_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    login_token: Optional[str] = Field(default=None, index=True)  # ilovaga kirish uchun
     balance: int = Field(default=0)  # referal bonus balansi (currency)
     is_blocked: bool = Field(default=False)
     created_at: NaiveDatetime = Field(default_factory=_now)

@@ -21,6 +21,16 @@ def get_user(session: Session, telegram_id: int) -> Optional[User]:
     return session.exec(select(User).where(User.telegram_id == telegram_id)).first()
 
 
+def ensure_login_token(session: Session, user: User) -> str:
+    """Ilovaga kirish uchun token (yo'q bo'lsa yaratadi)."""
+    if not user.login_token:
+        user.login_token = secrets.token_urlsafe(24)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return user.login_token
+
+
 def get_or_create_user(
     session: Session,
     telegram_id: int,
