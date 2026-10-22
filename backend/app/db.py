@@ -14,9 +14,12 @@ from sqlmodel import Session, SQLModel
 from .config import settings
 
 _url = settings.database_url
-# Railway ba'zan "postgres://" beradi; SQLAlchemy "postgresql://" kutadi.
+# Railway "postgres://" beradi. SQLAlchemy 2.1 standart postgres drayveri psycopg(v3) —
+# bizda psycopg2-binary bor, shuning uchun psycopg2'ni MAJBURIY qilamiz.
 if _url.startswith("postgres://"):
-    _url = _url.replace("postgres://", "postgresql://", 1)
+    _url = _url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif _url.startswith("postgresql://") and "+psycopg" not in _url:
+    _url = _url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 connect_args = {"check_same_thread": False} if _url.startswith("sqlite") else {}
 engine = create_engine(_url, echo=False, pool_pre_ping=True, connect_args=connect_args)
